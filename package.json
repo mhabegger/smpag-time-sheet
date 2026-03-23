@@ -1,0 +1,23 @@
+{
+  "name": "time-sheet-claude",
+  "version": "0.1.0",
+  "description": "Interactive time sheet assistant - analyzes ManicTime activity data and submits to ZEP",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/index.ts",
+    "test:zep": "tsx src/zep/test-connection.ts"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "date-fns": "^4.1.0",
+    "dotenv": "^16.4.0",
+    "yaml": "^2.8.3",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

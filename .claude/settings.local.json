@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:zep-frontend-bucket.s3.eu-central-1.amazonaws.com)",
+      "Bash(npm install:*)",
+      "Bash(rm -rf node_modules package-lock.json)",
+      "Bash(pnpm install:*)",
+      "Bash(npx tsc:*)",
+      "mcp__manictime-client__get_group_summary",
+      "mcp__manictime-client__get_combined_activities",
+      "Bash(ls:*)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "manictime-client"
+  ]
+}

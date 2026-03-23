@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "manictime-client": {
+      "command": "C:\\Program Files\\ManicTime\\ManicTimeMcp.exe",
+      "transport": "stdio"
+    }
+  }
+}
