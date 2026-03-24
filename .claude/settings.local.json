@@ -8,7 +8,9 @@
       "Bash(npx tsc:*)",
       "mcp__manictime-client__get_group_summary",
       "mcp__manictime-client__get_combined_activities",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"D:/CODE/time-sheet-claude/src/manictime/ocr.ps1\" -ImagePaths \"D:\\\\ManicTime\\\\Screenshots\\\\2026-03-24\\\\2026-03-24_00-00-37_01-00_2322_1494_2124816_1.thumbnail.jpg\" 2>&1)",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"D:/CODE/time-sheet-claude/src/manictime/ocr.ps1\" -ImagePaths \"D:\\\\ManicTime\\\\Screenshots\\\\2026-03-24\\\\2026-03-24_00-00-37_01-00_2322_1494_2124816_1.jpg\" 2>&1)"
     ]
   },
   "enabledMcpjsonServers": [

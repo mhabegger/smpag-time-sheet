@@ -47,6 +47,21 @@ Use `mcp__manictime-client__get_group_summary` with:
 - summaryType: "WebSite"
 - fields: ["name", "duration"]
 
+## Step 3d: Screenshot verification (run in parallel with 3a-3c)
+
+Sample screenshots across the day and run Windows OCR to catch work topics that window titles alone might miss:
+
+```bash
+cd D:\CODE\time-sheet-claude && npx tsx src/manictime/screenshot-verify.ts YYYY-MM-DD 30
+```
+
+This samples one screenshot every 30 minutes across the active day and OCRs them. The output shows what was on screen at each sample point. Use this to:
+- Verify your activity classification covers all visible work topics
+- Catch work that might not be obvious from app/window titles alone (e.g., a browser tab with a customer name, a document being reviewed, Jira board context)
+- Flag any unclassified topics you notice in the OCR text
+
+If the script fails or returns no results, continue without it — screenshots are supplementary, not required.
+
 ## Step 4: Load ZEP project context
 
 Load the cached ZEP project list:
@@ -62,7 +77,7 @@ console.log(store.formatProjectList());
 
 ## Step 5: Analyze and classify
 
-Now analyze the ManicTime data and classify each work period into ZEP projects/tasks. Apply these rules:
+Now analyze the ManicTime data and classify each work period into ZEP projects/tasks. Cross-reference with the screenshot OCR samples from Step 3d — if the OCR reveals a work topic (customer name, project board, document) that isn't reflected in the activity data, add or adjust entries accordingly. Apply these rules:
 
 ### Privacy Filter - EXCLUDE these activities:
 - WhatsApp (app or web.whatsapp.com)

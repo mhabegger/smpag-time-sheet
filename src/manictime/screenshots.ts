@@ -94,6 +94,8 @@ export async function sampleScreenshots(
   if (all.length === 0) return [];
   if (all.length <= count) return all.map((s) => s.path);
 
+  if (count === 1) return [all[Math.floor(all.length / 2)].path];
+
   const indices: number[] = [];
   for (let i = 0; i < count; i++) {
     indices.push(Math.floor((i / (count - 1)) * (all.length - 1)));
