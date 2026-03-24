@@ -15,10 +15,39 @@ interface YamlEntry {
   task: string;
   billable: boolean;
   note?: string;
+  color?: string;
 }
 
 interface YamlFile {
   entries: YamlEntry[];
+}
+
+/** Auto-assign color based on project/task classification */
+function getEntryColor(e: YamlEntry): string {
+  const proj = e.project;
+  const task = e.task;
+
+  // Scrum ceremonies (SMPAG 1.1)
+  if (proj === "26__SMPAG" && task === "1.1") return "#EADFF7";
+
+  // Non-billable admin/coordination/mail (SMPAG 2/mp, admi, etc.)
+  if (proj === "26__SMPAG" && (task === "mp" || task === "admi" || task.startsWith("2")))
+    return "#C0C0C0";
+
+  // Internal / SMPAG (R&D, strategy, etc.)
+  if (proj === "26__SMPAG") return "#fbb6b9";
+
+  // deliver.media product work
+  if (proj.includes("deliver.media")) return "#D9F4F9";
+
+  // CH Media projects (A200811 SCTE, P80133 TVR, etc.)
+  if (proj.startsWith("A200811") || proj.startsWith("P80133")) return "#73D8EA";
+
+  // Any other billable
+  if (e.billable) return "#86DFA7";
+
+  // Default gray for non-billable
+  return "#C0C0C0";
 }
 
 const file = process.argv[2];
@@ -61,6 +90,8 @@ for (const e of data.entries) {
     project_task_id: task.id,
     activity_id: "S",
     billable: e.billable,
+    note: e.note,
+    color: e.color || getEntryColor(e),
   });
 
   console.log(

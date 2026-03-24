@@ -64,6 +64,8 @@ export interface CreateAttendanceInput {
   activity_id: string;
   billable?: boolean;
   duration?: number;
+  note?: string;
+  color?: string;
 }
 
 export interface PaginatedResponse<T> {

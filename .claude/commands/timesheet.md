@@ -28,10 +28,11 @@ Use the ManicTime MCP tools to get activity data for the date. Make these calls 
 
 ### 3a. Combined activities (the main data source)
 Use `mcp__manictime-client__get_combined_activities` with:
-- fromTime: "YYYY-MM-DDT05:00:00" (early start - user sometimes works before 07:00)
-- toTime: "YYYY-MM-DDT+1T02:00:00" (next day 02:00 - user often works evenings past midnight)
+- fromTime: "YYYY-MM-DDT00:00:00" (start of day)
+- toTime: "YYYY-MM-DD+1T00:00:00" (end of day / start of next day)
+- Do NOT use overlapping date ranges — each day is exactly 00:00 to 24:00
 - fields: [{"name": "activityName"}, {"name": "groupName"}, {"name": "groupKey", "summaryType": "Application"}, {"name": "groupName", "summaryType": "WebSite"}]
-- filter: "Activities/any(a: a/SummaryType eq 'ComputerUsage' and a/GroupKey eq 'active')" to only get active periods
+- Do NOT use the ComputerUsage active filter — it returns empty results. Fetch all activities and filter for "Active" entries in the parsed data.
 - Set maxRowCount to 10000
 
 ### 3b. Top applications summary
@@ -101,16 +102,18 @@ Show the proposed timesheet as a formatted table:
 ```
 # Time Sheet for [Day], [Date]
 
-| Time | Duration | Project | Task | Description | Conf |
-|------|----------|---------|------|-------------|------|
-| 08:00-08:45 | 45m | 26__SMPAG | 1.1 Developer | Email, planning | 85% |
-| 08:45-09:00 | 15m | 26__SMPAG | 1.1 Developer | Daily standup | 95% |
-| ... | | | | | |
+| # | Time | Duration | Project | Task | Description | Conf |
+|---|------|----------|---------|------|-------------|------|
+| 1 | 08:00-08:45 | 45m | 26__SMPAG | 2 / mp | Email, planning | 85% |
+| 2 | 08:45-09:00 | 15m | 26__SMPAG | 1.1 | Daily standup | 95% |
+| ... | | | | | | |
 
 **Total: 8h 15m** (Billable: 6h 30m)
 **Already tracked in ZEP: Xh Ym** (if any)
 **Gaps/breaks: 12:00-13:00 (lunch)**
 ```
+
+Always include a # (number) column so the user can reference entries easily (e.g., "change 3 to...", "merge 5 and 6").
 
 Mark low-confidence entries with a note explaining the ambiguity.
 
@@ -142,12 +145,14 @@ When the user is happy with the table, write a `pending.yaml` file:
 entries:
   - date: "YYYY-MM-DD"
     from: "HH:mm:ss"
-    to: "HH:mm:ss"      # Use "24:00:00" for end of day, never "00:00:00" or "23:59:00"
+    to: "HH:mm:ss"      # Use "23:59:00" for end of day (ZEP API rejects "24:00:00" and "00:00:00")
     project: ProjectName
     task: TaskName
     billable: true/false
     note: "description"
 ```
+
+**IMPORTANT:** The ZEP API does not accept "24:00:00" or "00:00:00" as end times (it interprets them as before the start time). Use "23:59:00" instead and warn the user to manually fix it in ZEP UI if needed.
 
 ### 8c. Submit
 When the user says "submit", run:
@@ -165,11 +170,17 @@ Report results: how many submitted, any skipped (conflicts), any errors.
 - Learn from corrections: if the user corrects you, note the pattern for future reference
 - The user works at SMPAG, main computer is LAPTOP-GEQKBNM5
 - Time entries use the format HH:mm:ss for ZEP API (e.g., "09:00:00")
-- Time format: "00:00:00" = start of day, "24:00:00" = end of day. "to" must be > "from"
+- Time format: "00:00:00" = start of day, "23:59:00" = end of day (ZEP rejects 24:00:00). "to" must be > "from"
 - The employee_id comes from the ZEP_EMPLOYEE_ID env var
 - The default activity_id is "S" (required field, cannot be empty)
 - 26__SMPAG / 1.1 Developer = Scrum ceremonies ONLY (standups, sprint meetings), NOT general dev work
 - 26__SMPAG / 5 = Research & Dev for internal tooling, research, experimentation
-- User often works evenings and sometimes before 07:00 — always query ManicTime with wide window (05:00-02:00 next day)
+- 26__SMPAG / 2 / mp = General email, calendar, admin correspondence
+- 26__SMPAG / 3 / sc = Strategy work (roadmaps, governance, onboarding process)
+- Wednesday 08:15-08:45 = recurring Jour Fixe consulting with S. Handke (CH Media) → P80133 / 1.2 (billable)
+- P80127 / 9_PM = VPM project management
+- Query ManicTime with full 00:00-24:00 window per day — no overlapping date ranges
+- The submit script auto-assigns colors based on project type (colors are sent to ZEP API)
+- The ZEP API does NOT support PUT/PATCH/DELETE on attendances — only GET and POST
 - Do NOT create temp .ts files for submission — use `pending.yaml` + `src/zep/submit.ts`
 - Always show table first for review, then write YAML, then submit only when explicitly asked
