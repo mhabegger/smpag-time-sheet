@@ -24,9 +24,12 @@ export class ZepClient {
     });
   }
 
-  /** Fetch all projects (handles pagination) */
-  async getProjects(): Promise<ZepProject[]> {
-    return this.fetchAllPages<ZepProject>("/projects");
+  /** Fetch all projects, optionally filtered by date range */
+  async getProjects(startDate?: string, endDate?: string): Promise<ZepProject[]> {
+    const params: Record<string, string> = {};
+    if (startDate) params.start_date = startDate;
+    if (endDate) params.end_date = endDate;
+    return this.fetchAllPages<ZepProject>("/projects", params);
   }
 
   /** Fetch tasks for a specific project */

@@ -14,15 +14,17 @@ Parse $ARGUMENTS to determine the target date. Default to today. Convert relativ
 
 ## Step 2: Check existing ZEP entries
 
-Run the ZEP test script to check what's already tracked for this date:
+Query ZEP for the **target date** (not today):
 ```bash
-cd D:\CODE\time-sheet-claude && npx tsx src/zep/test-connection.ts
+cd D:\CODE\time-sheet-claude && npx tsx src/zep/query-date.ts YYYY-MM-DD
 ```
-This shows all projects, tasks, and existing attendances for the date. Parse the attendances section to identify already-tracked time.
+Replace YYYY-MM-DD with the actual target date from Step 1. This shows existing attendances with project/task names.
 
 If entries exist, show them first so the user knows what's already tracked.
 
 ## Step 3: Fetch ManicTime data
+
+**IMPORTANT:** All date references below (YYYY-MM-DD) must use the **target date from Step 1**, NOT today's date. Double-check before making any call.
 
 Use the ManicTime MCP tools to get activity data for the date. Make these calls in parallel:
 
@@ -64,16 +66,11 @@ If the script fails or returns no results, continue without it — screenshots a
 
 ## Step 4: Load ZEP project context
 
-Load the cached ZEP project list:
+Load the ZEP project list filtered to the target month (reduces ~800+ projects to ~45 active ones):
 ```bash
-cd D:\CODE\time-sheet-claude && npx tsx -e "
-import { ZepClient } from './src/zep/client.js';
-import { ZepProjectStore } from './src/zep/projects.js';
-const store = new ZepProjectStore(new ZepClient());
-await store.init();
-console.log(store.formatProjectList());
-"
+cd D:\CODE\time-sheet-claude && npx tsx src/zep/list-projects.ts YYYY-MM-DD
 ```
+Replace YYYY-MM-DD with the target date. The script filters to projects active in that month.
 
 ## Step 5: Analyze and classify
 
@@ -89,6 +86,7 @@ Now analyze the ManicTime data and classify each work period into ZEP projects/t
 ### Project Mapping Knowledge:
 - **Daily standup** (08:45-09:00 weekdays, usually Teams) -> 26__SMPAG / 1.1 Developer
 - **Scrum meetings** (sprint planning, retro, review) -> 26__SMPAG / 1.1 Developer (Scrum-related activities ONLY)
+- **Monday afternoon** = Sprint Review + Retro + short Planning session. Track as 26__SMPAG / 1.1 (ceremonies) and 26__SMPAG / 1.3 (PO/planning work). Activities during this block (project reviews, demos, strategy discussions) are part of the sprint ceremonies — do NOT split into individual project entries.
 - **Internal tooling / research / experimentation** -> 26__SMPAG / 5 Research & Dev
 - **General email in Outlook** (reading/writing emails, calendar) -> 26__SMPAG / 2 Administration / mp
 - **Zendesk tickets about MusicMaster** (visible customer name) -> MusicMaster / {customer name}
@@ -119,16 +117,23 @@ Show the proposed timesheet as a formatted table:
 
 | # | Time | Duration | Project | Task | Description | Conf |
 |---|------|----------|---------|------|-------------|------|
-| 1 | 08:00-08:45 | 45m | 26__SMPAG | 2 / mp | Email, planning | 85% |
+| 1 | 06:45-07:30 | 45m | 26__deliver.media | 1.11 ONE/apps | aircheck dev, sprint prep | 80% |
+| — | 07:30-08:00 | 30m | *ZEP: P80129 / 1* | | *Planung mit MB* | |
+| — | 08:00-08:45 | 45m | *ZEP: 26__SMPAG / general* | | *KL* | |
 | 2 | 08:45-09:00 | 15m | 26__SMPAG | 1.1 | Daily standup | 95% |
+| — | 12:00-13:00 | 1h | *Lunch break* | | | |
+| — | 14:15-14:30 | 15m | *Private* | | | |
+| — | 15:00-17:00 | 2h | *Away / no activity* | | | |
 | ... | | | | | | |
 
-**Total: 8h 15m** (Billable: 6h 30m)
+**New entries total: Xh Ym**
 **Already tracked in ZEP: Xh Ym** (if any)
-**Gaps/breaks: 12:00-13:00 (lunch)**
+**Grand total: Xh Ym**
 ```
 
-Always include a # (number) column so the user can reference entries easily (e.g., "change 3 to...", "merge 5 and 6").
+**IMPORTANT table formatting rules:**
+- Always include a # (number) column so the user can reference entries easily (e.g., "change 3 to...", "merge 5 and 6").
+- Always include **all time segments** in the table, including already-tracked ZEP entries, lunch breaks, private time, and gaps with no activity. Use `—` for the # column and *italic* for these non-editable rows. This gives the user a complete picture of the entire day without gaps in the timeline.
 
 Mark low-confidence entries with a note explaining the ambiguity.
 

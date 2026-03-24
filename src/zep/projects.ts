@@ -16,9 +16,21 @@ const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 interface ProjectCache {
   timestamp: string;
+  dateRange?: string; // "YYYY-MM-DD:YYYY-MM-DD" used for this cache
   projects: ZepProject[];
   tasks: Record<number, ZepTask[]>; // projectId -> tasks
   activities: Record<number, ZepActivity[]>; // projectId -> activities
+}
+
+/** Get first and last day of the month for a given date string (YYYY-MM-DD) */
+function getMonthRange(date: string): { startDate: string; endDate: string } {
+  const d = new Date(date);
+  const year = d.getFullYear();
+  const month = d.getMonth();
+  const startDate = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const endDate = `${year}-${String(month + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  return { startDate, endDate };
 }
 
 export class ZepProjectStore {
@@ -29,21 +41,24 @@ export class ZepProjectStore {
     this.client = client;
   }
 
-  /** Load cache from disk or fetch fresh */
-  async init(forceRefresh = false): Promise<void> {
+  /** Load cache from disk or fetch fresh. Pass a date (YYYY-MM-DD) to filter projects active in that month. */
+  async init(forceRefresh = false, date?: string): Promise<void> {
+    const dateRange = date ? getMonthRange(date) : undefined;
+    const rangeKey = dateRange ? `${dateRange.startDate}:${dateRange.endDate}` : undefined;
+
     if (!forceRefresh) {
       const loaded = await this.loadCacheFromDisk();
-      if (loaded) {
+      if (loaded && (!rangeKey || loaded.dateRange === rangeKey)) {
         this.cache = loaded;
         return;
       }
     }
-    await this.refresh();
+    await this.refresh(dateRange);
   }
 
   /** Refresh cache from ZEP API */
-  async refresh(): Promise<void> {
-    const projects = await this.client.getProjects();
+  async refresh(dateRange?: { startDate: string; endDate: string }): Promise<void> {
+    const projects = await this.client.getProjects(dateRange?.startDate, dateRange?.endDate);
     const bookable = projects.filter((p) => p.status.bookable);
 
     const tasks: Record<number, ZepTask[]> = {};
@@ -58,6 +73,7 @@ export class ZepProjectStore {
 
     this.cache = {
       timestamp: new Date().toISOString(),
+      dateRange: dateRange ? `${dateRange.startDate}:${dateRange.endDate}` : undefined,
       projects: bookable,
       tasks,
       activities,
