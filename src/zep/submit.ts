@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { parse } from "yaml";
 import { ZepClient } from "./client.js";
-import { ZepProjectStore } from "./projects.js";
+import { ZepProjectStore, isBillable, isBillableUserChangeable } from "./projects.js";
 import { AttendanceManager } from "./attendances.js";
 import { getEnv } from "../config/env.js";
 import type { CreateAttendanceInput } from "./types.js";
@@ -13,7 +13,8 @@ interface YamlEntry {
   to: string;
   project: string;
   task: string;
-  billable: boolean;
+  subtask?: string; // child task name (under parent task), resolved to project_task_id
+  billable?: boolean; // Optional — auto-determined from project if omitted
   note?: string;
   color?: string;
 }
@@ -73,12 +74,54 @@ for (const e of data.entries) {
     console.error(`Project not found: ${e.project}`);
     process.exit(1);
   }
-  const task = store.getTasks(proj.id).find(
-    (t) => t.name === e.task && t.parent_id === null
-  ) ?? store.getTasks(proj.id).find((t) => t.name === e.task);
-  if (!task) {
-    console.error(`Task not found: ${e.task} in project ${e.project}`);
+  const allTasks = store.getTasks(proj.id);
+  const activeTasks = allTasks.filter(
+    (t) => !t.status || t.status === "in Arbeit"
+  );
+
+  // Determine the target leaf task name (subtask if provided, otherwise task)
+  const targetName = e.subtask ?? e.task;
+
+  // Find the task by name — works at any nesting depth
+  const candidates = activeTasks.filter((t) => t.name === targetName);
+  let resolvedTask = candidates.length === 1
+    ? candidates[0]
+    : candidates.find((t) => t.parent_id !== null) ?? candidates[0]; // prefer child over root if ambiguous
+
+  if (!resolvedTask) {
+    console.error(`Task not found: "${targetName}" in project ${e.project} (active tasks only)`);
     process.exit(1);
+  }
+
+  // Prevent booking to parent tasks that have children (must book to leaf tasks)
+  const hasChildren = activeTasks.some((t) => t.parent_id === resolvedTask!.id);
+  if (hasChildren) {
+    const children = activeTasks
+      .filter((t) => t.parent_id === resolvedTask!.id)
+      .map((t) => `${t.name} (${t.description || ""})`);
+    console.error(
+      `Task "${targetName}" has subtasks — book to a leaf task instead. Subtasks: ${children.join(", ")}`
+    );
+    process.exit(1);
+  }
+  const task = resolvedTask;
+
+  // Auto-determine billable from project; warn on mismatch
+  const projectBillable = isBillable(proj);
+  const userCanChange = isBillableUserChangeable(proj);
+  let billable = projectBillable;
+
+  if (e.billable !== undefined && e.billable !== projectBillable) {
+    if (!userCanChange) {
+      console.warn(
+        `⚠ ${e.project}: billable=${e.billable} in YAML but project is ${projectBillable ? "billable" : "non-billable"} (locked). Using project default.`
+      );
+    } else {
+      console.warn(
+        `⚠ ${e.project}: billable=${e.billable} in YAML overrides project default (${projectBillable ? "billable" : "non-billable"}). Allowed (user-changeable).`
+      );
+      billable = e.billable;
+    }
   }
 
   inputs.push({
@@ -89,13 +132,14 @@ for (const e of data.entries) {
     project_id: proj.id,
     project_task_id: task.id,
     activity_id: "S",
-    billable: e.billable,
+    billable,
     note: e.note,
     color: e.color || getEntryColor(e),
   });
 
+  const taskLabel = e.subtask ? `${e.task}/${e.subtask}` : e.task;
   console.log(
-    `  ${e.from}-${e.to} ${e.project}/${e.task} (${proj.id}/${task.id}) ${e.billable ? "billable" : ""} ${e.note || ""}`
+    `  ${e.from}-${e.to} ${e.project}/${taskLabel} (${proj.id}/${task.id}) ${billable ? "billable" : "non-bill"} ${e.note || ""}`
   );
 }
 

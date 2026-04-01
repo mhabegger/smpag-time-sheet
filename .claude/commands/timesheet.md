@@ -117,10 +117,10 @@ Show the proposed timesheet as a formatted table:
 
 | # | Time | Duration | Project | Task | Description | Conf |
 |---|------|----------|---------|------|-------------|------|
-| 1 | 06:45-07:30 | 45m | 26__deliver.media | 1.11 ONE/apps | aircheck dev, sprint prep | 80% |
+| 1 | 06:45-07:30 | 45m | 26__deliver.media | 1.11 ONE/apps (deliver.media ONE/apps) | aircheck dev, sprint prep | 80% |
 | — | 07:30-08:00 | 30m | *ZEP: P80129 / 1* | | *Planung mit MB* | |
 | — | 08:00-08:45 | 45m | *ZEP: 26__SMPAG / general* | | *KL* | |
-| 2 | 08:45-09:00 | 15m | 26__SMPAG | 1.1 | Daily standup | 95% |
+| 2 | 08:45-09:00 | 15m | 26__SMPAG | 1.1 Developer | Daily standup | 95% |
 | — | 12:00-13:00 | 1h | *Lunch break* | | | |
 | — | 14:15-14:30 | 15m | *Private* | | | |
 | — | 15:00-17:00 | 2h | *Away / no activity* | | | |
@@ -133,6 +133,7 @@ Show the proposed timesheet as a formatted table:
 
 **IMPORTANT table formatting rules:**
 - Always include a # (number) column so the user can reference entries easily (e.g., "change 3 to...", "merge 5 and 6").
+- Always include **task descriptions** in the Task column (e.g., "5 Research & Dev", "1.1 Developer", "2 / cre Creditors") — the user doesn't know all task IDs by heart.
 - Always include **all time segments** in the table, including already-tracked ZEP entries, lunch breaks, private time, and gaps with no activity. Use `—` for the # column and *italic* for these non-editable rows. This gives the user a complete picture of the entire day without gaps in the timeline.
 
 Mark low-confidence entries with a note explaining the ambiguity.
@@ -167,10 +168,18 @@ entries:
     from: "HH:mm:ss"
     to: "HH:mm:ss"      # Use "23:59:00" for end of day (ZEP API rejects "24:00:00" and "00:00:00")
     project: ProjectName
-    task: TaskName
+    task: LeafTaskName   # Always use the LEAF task name (the actual bookable task, not a parent)
     billable: true/false
     note: "description"
 ```
+
+**Task resolution rules:**
+- `task` should always be the **leaf task name** — the submit script finds it at any nesting depth
+- Only book to leaf tasks (no children). The script rejects parent tasks and shows available subtasks.
+- For disambiguation when two tasks share a name, use `subtask`: set `task` to the parent name and `subtask` to the child name
+- Examples: `task: "5"` (leaf), `task: "cre"` (leaf under fin under 2), `task: "1.1"` (leaf under Scrum under 1)
+- **deliver.media tasks** have compound names — always use the full name: `"1.11 ONE/apps"` (not `"1.11"`), `"1.1 aircheck."` (not `"1.1"`), `"musiccompanion. AI voice"`, etc. SMPAG tasks use short names (`"1.1"`, `"mp"`, `"sys"`).
+- `activity_id` is always "S" (hardcoded) — do NOT confuse ZEP activities with task/subtask
 
 **IMPORTANT:** The ZEP API does not accept "24:00:00" or "00:00:00" as end times (it interprets them as before the start time). Use "23:59:00" instead and warn the user to manually fix it in ZEP UI if needed.
 

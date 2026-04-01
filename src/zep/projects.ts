@@ -33,6 +33,19 @@ function getMonthRange(date: string): { startDate: string; endDate: string } {
   return { startDate, endDate };
 }
 
+/** Determine billability from the project's default_billability name.
+ *  "Fakturierbar..." = billable, "Not billable..." = non-billable */
+export function isBillable(project: ZepProject): boolean {
+  const name = project.default_billability?.name?.toLowerCase() ?? "";
+  return name.startsWith("fakturierbar");
+}
+
+/** Whether the user can override the billable flag for this project */
+export function isBillableUserChangeable(project: ZepProject): boolean {
+  const name = project.default_billability?.name ?? "";
+  return name.includes("änderbar") && !name.includes("nicht änderbar");
+}
+
 export class ZepProjectStore {
   private client: ZepClient;
   private cache: ProjectCache | null = null;
@@ -87,9 +100,10 @@ export class ZepProjectStore {
     return this.cache?.projects ?? [];
   }
 
-  /** Get tasks for a project */
+  /** Get tasks for a project (only active ones — excludes erledigt/on hold) */
   getTasks(projectId: number): ZepTask[] {
-    return this.cache?.tasks[projectId] ?? [];
+    const tasks = this.cache?.tasks[projectId] ?? [];
+    return tasks.filter((t) => !t.status || t.status === "in Arbeit");
   }
 
   /** Get activities for a project */
@@ -117,19 +131,30 @@ export class ZepProjectStore {
     );
   }
 
-  /** Get flat list of all project->task entries for display/autocomplete */
+  /** Get flat list of all project->task entries for display/autocomplete (leaf tasks only) */
   getAllProjectTaskEntries(): ProjectTaskEntry[] {
     const entries: ProjectTaskEntry[] = [];
     for (const project of this.getProjects()) {
       const tasks = this.getTasks(project.id);
       for (const task of tasks) {
+        // Skip parent tasks that have children — only leaf tasks are bookable
+        const hasChildren = tasks.some((t) => t.parent_id === task.id);
+        if (hasChildren) continue;
+
+        const parent = task.parent_id
+          ? tasks.find((t) => t.id === task.parent_id)
+          : null;
+        const taskPath = parent
+          ? `${project.name} / ${parent.name} / ${task.name}`
+          : `${project.name} / ${task.name}`;
+
         entries.push({
           projectId: project.id,
           projectName: project.name,
           taskId: task.id,
           taskName: task.name,
-          taskPath: `${project.name} -> ${task.name}`,
-          billable: project.default_billability?.name === "billable",
+          taskPath,
+          billable: isBillable(project),
         });
       }
     }
@@ -140,11 +165,15 @@ export class ZepProjectStore {
   formatProjectList(): string {
     const lines: string[] = ["# Available ZEP Projects and Tasks\n"];
     for (const project of this.getProjects()) {
-      lines.push(`## ${project.name} (ID: ${project.id})`);
+      const billTag = isBillable(project) ? "billable" : "non-billable";
+      lines.push(`## ${project.name} (ID: ${project.id}) [${billTag}]`);
       const tasks = this.getTasks(project.id);
       for (const task of tasks) {
+        const hasChildren = tasks.some((t) => t.parent_id === task.id);
         const indent = task.parent_id ? "    " : "  ";
-        lines.push(`${indent}- ${task.name} (ID: ${task.id})`);
+        const desc = task.description ? ` — ${task.description}` : "";
+        const suffix = hasChildren ? " [PARENT - book to subtask]" : "";
+        lines.push(`${indent}- ${task.name} (ID: ${task.id})${desc}${suffix}`);
       }
       const acts = this.getActivities(project.id);
       if (acts.length > 0) {
