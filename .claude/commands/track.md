@@ -72,9 +72,11 @@ The note should summarize what the ManicTime data shows:
 
 Ask: **"Submit this? (or edit the note/details)"**
 
-## Step 5: Submit
+## Step 5: Write pending.yaml
 
-When the user confirms, write `pending.yaml` and submit.
+When the user confirms the proposal, write `pending.yaml`:
+
+**IMPORTANT:** Always `Read` pending.yaml first (even if it will be overwritten) — the Write tool errors if the file hasn't been read in the current conversation.
 
 YAML format — always use the **leaf task name** in `task`:
 ```yaml
@@ -89,6 +91,21 @@ entries:
 ```
 The submit script finds the leaf task by name regardless of nesting depth (e.g., `sc` under `3`, `cre` under `fin` under `2`, `1.1` under `Scrum` under `1`). Only use `subtask` field for disambiguation if two tasks share the same name.
 
+## Step 6: Show table and confirm before submitting
+
+After writing pending.yaml, display a verification table:
+
+| Date | From | To | Project | Task | Billable | Note |
+|------|------|----|---------|------|----------|------|
+| 2026-04-06 | 10:15 | 11:00 | 26__SMPAG | cre | no | ... |
+
+Then ask: **"Push to ZEP? (yes/no)"**
+
+**Do NOT run the submit script until the user explicitly confirms.**
+
+## Step 7: Submit
+
+Only after explicit confirmation, run:
 ```bash
 cd D:\CODE\time-sheet-claude && npx tsx src/zep/submit.ts pending.yaml
 ```

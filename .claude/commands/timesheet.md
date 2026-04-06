@@ -161,7 +161,9 @@ Follow this 3-step workflow:
 The user reviews the formatted table and requests changes.
 
 ### 8b. YAML
-When the user is happy with the table, write a `pending.yaml` file:
+When the user is happy with the table, write a `pending.yaml` file.
+
+**IMPORTANT:** Always `Read` pending.yaml first (even if it will be overwritten) — the Write tool errors if the file hasn't been read in the current conversation.
 ```yaml
 entries:
   - date: "YYYY-MM-DD"
@@ -183,8 +185,8 @@ entries:
 
 **IMPORTANT:** The ZEP API does not accept "24:00:00" or "00:00:00" as end times (it interprets them as before the start time). Use "23:59:00" instead and warn the user to manually fix it in ZEP UI if needed.
 
-### 8c. Submit
-When the user says "submit", run:
+### 8c. Confirm and Submit
+After writing pending.yaml, show its contents as a verification table. **Do NOT run the submit script until the user explicitly confirms** (e.g., "yes", "go", "submit"). When confirmed, run:
 ```bash
 cd D:\CODE\time-sheet-claude && npx tsx src/zep/submit.ts pending.yaml
 ```
