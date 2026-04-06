@@ -49,7 +49,7 @@ Also fetch `mcp__manictime-client__get_group_summary` for "Application" summary 
 
 If the project cache might be stale or this is the first call, load the project list:
 ```bash
-cd D:\CODE\time-sheet-claude && npx tsx src/zep/list-projects.ts YYYY-MM-DD
+npx tsx src/zep/list-projects.ts YYYY-MM-DD
 ```
 
 Verify the project/task name matches a real ZEP project. If ambiguous, ask.
@@ -107,7 +107,7 @@ Then ask: **"Push to ZEP? (yes/no)"**
 
 Only after explicit confirmation, run:
 ```bash
-cd D:\CODE\time-sheet-claude && npx tsx src/zep/submit.ts pending.yaml
+npx tsx src/zep/submit.ts pending.yaml
 ```
 
 Report the result. If there's a conflict with an existing entry, tell the user.

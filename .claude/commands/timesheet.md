@@ -16,7 +16,7 @@ Parse $ARGUMENTS to determine the target date. Default to today. Convert relativ
 
 Query ZEP for the **target date** (not today):
 ```bash
-cd D:\CODE\time-sheet-claude && npx tsx src/zep/query-date.ts YYYY-MM-DD
+npx tsx src/zep/query-date.ts YYYY-MM-DD
 ```
 Replace YYYY-MM-DD with the actual target date from Step 1. This shows existing attendances with project/task names.
 
@@ -54,7 +54,7 @@ Use `mcp__manictime-client__get_group_summary` with:
 Sample screenshots across the day and run Windows OCR to catch work topics that window titles alone might miss:
 
 ```bash
-cd D:\CODE\time-sheet-claude && npx tsx src/manictime/screenshot-verify.ts YYYY-MM-DD 30
+npx tsx src/manictime/screenshot-verify.ts YYYY-MM-DD 30
 ```
 
 This samples one screenshot every 30 minutes across the active day and OCRs them. The output shows what was on screen at each sample point. Use this to:
@@ -68,7 +68,7 @@ If the script fails or returns no results, continue without it — screenshots a
 
 Load the ZEP project list filtered to the target month (reduces ~800+ projects to ~45 active ones):
 ```bash
-cd D:\CODE\time-sheet-claude && npx tsx src/zep/list-projects.ts YYYY-MM-DD
+npx tsx src/zep/list-projects.ts YYYY-MM-DD
 ```
 Replace YYYY-MM-DD with the target date. The script filters to projects active in that month.
 
@@ -188,7 +188,7 @@ entries:
 ### 8c. Confirm and Submit
 After writing pending.yaml, show its contents as a verification table. **Do NOT run the submit script until the user explicitly confirms** (e.g., "yes", "go", "submit"). When confirmed, run:
 ```bash
-cd D:\CODE\time-sheet-claude && npx tsx src/zep/submit.ts pending.yaml
+npx tsx src/zep/submit.ts pending.yaml
 ```
 
 The submit script resolves project/task names to IDs, checks for conflicts, and submits.
