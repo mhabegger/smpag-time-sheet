@@ -10,7 +10,10 @@
       "mcp__manictime-client__get_combined_activities",
       "Bash(ls:*)",
       "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"D:/CODE/time-sheet-claude/src/manictime/ocr.ps1\" -ImagePaths \"D:\\\\ManicTime\\\\Screenshots\\\\2026-03-24\\\\2026-03-24_00-00-37_01-00_2322_1494_2124816_1.thumbnail.jpg\" 2>&1)",
-      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"D:/CODE/time-sheet-claude/src/manictime/ocr.ps1\" -ImagePaths \"D:\\\\ManicTime\\\\Screenshots\\\\2026-03-24\\\\2026-03-24_00-00-37_01-00_2322_1494_2124816_1.jpg\" 2>&1)"
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"D:/CODE/time-sheet-claude/src/manictime/ocr.ps1\" -ImagePaths \"D:\\\\ManicTime\\\\Screenshots\\\\2026-03-24\\\\2026-03-24_00-00-37_01-00_2322_1494_2124816_1.jpg\" 2>&1)",
+      "PowerShell($content = Get-Content 'C:\\\\Users\\\\mh\\\\.claude\\\\projects\\\\D--CODE-time-sheet-claude\\\\635fd649-eb38-4330-95ba-b64d615f3954\\\\tool-results\\\\mcp-manictime-client-get_combined_activities-1780429026199.txt' -Raw; $data = $content | ConvertFrom-Json; $data.combinedActivities.columns)",
+      "PowerShell($f=\"C:\\\\Users\\\\mh\\\\.claude\\\\projects\\\\D--CODE-time-sheet-claude\\\\77fc6488-ab62-49ca-bef5-069504d50dbd\\\\tool-results\\\\mcp-manictime-client-get_combined_activities-1780431274860.txt\"; $j=Get-Content $f -Raw | ConvertFrom-Json; [PSCustomObject]@{combinedCols=$j.combinedActivities.columns -join ','; timelineCols=$j.timelineActivities.columns -join ','; groupsCols=$j.groups.columns -join ','; combinedLen=$j.combinedActivities.rows.Count; timelineLen=$j.timelineActivities.rows.Count; groupsLen=$j.groups.rows.Count} | Format-List)",
+      "PowerShell($f=\"C:\\\\Users\\\\mh\\\\.claude\\\\projects\\\\D--CODE-time-sheet-claude\\\\77fc6488-ab62-49ca-bef5-069504d50dbd\\\\tool-results\\\\mcp-manictime-client-get_combined_activities-1780431274860.txt\"; $j=Get-Content $f -Raw | ConvertFrom-Json; \"GROUPS:\"; $j.groups.rows | ForEach-Object { \"{0} | {1} | {2}\" -f $_[0],$_[1],$_[2] })"
     ]
   },
   "enabledMcpjsonServers": [

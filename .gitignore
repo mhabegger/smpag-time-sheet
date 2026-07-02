@@ -5,3 +5,12 @@ dist/
 *.js.map
 
 pending.yaml
+pending-*.yaml
+tmp-shots*/
+
+# web app
+data/
+.tanstack/
+.nitro/
+.output/
+src/routeTree.gen.ts

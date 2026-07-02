@@ -56,17 +56,23 @@ export class AttendanceManager {
     entries: CreateAttendanceInput[],
     skipConflicts = true
   ): Promise<SubmitResult> {
-    const date = entries[0]?.date;
-    if (!date) return { submitted: [], skipped: [], errors: [] };
+    if (entries.length === 0) return { submitted: [], skipped: [], errors: [] };
 
-    const existing = await this.getExisting(date);
-    const conflicts = this.findConflicts(existing, entries);
-    const conflictSet = new Set(conflicts.map((c) => `${c.proposed.from}-${c.proposed.to}`));
+    // Conflicts are checked per date (a YAML batch may span multiple days).
+    const dates = [...new Set(entries.map((e) => e.date))];
+    const conflictSet = new Set<string>();
+    for (const date of dates) {
+      const existing = await this.getExisting(date);
+      const sameDay = entries.filter((e) => e.date === date);
+      const conflicts = this.findConflicts(existing, sameDay);
+      for (const c of conflicts)
+        conflictSet.add(`${c.proposed.date}|${c.proposed.from}-${c.proposed.to}`);
+    }
 
     const result: SubmitResult = { submitted: [], skipped: [], errors: [] };
 
     for (const entry of entries) {
-      const key = `${entry.from}-${entry.to}`;
+      const key = `${entry.date}|${entry.from}-${entry.to}`;
       if (skipConflicts && conflictSet.has(key)) {
         result.skipped.push(entry);
         continue;

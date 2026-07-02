@@ -49,9 +49,11 @@ export function isBillableUserChangeable(project: ZepProject): boolean {
 export class ZepProjectStore {
   private client: ZepClient;
   private cache: ProjectCache | null = null;
+  private cacheFile: string;
 
-  constructor(client: ZepClient) {
+  constructor(client: ZepClient, cacheFile?: string) {
     this.client = client;
+    this.cacheFile = cacheFile ?? CACHE_FILE;
   }
 
   /** Load cache from disk or fetch fresh. Pass a date (YYYY-MM-DD) to filter projects active in that month. */
@@ -104,6 +106,11 @@ export class ZepProjectStore {
   getTasks(projectId: number): ZepTask[] {
     const tasks = this.cache?.tasks[projectId] ?? [];
     return tasks.filter((t) => !t.status || t.status === "in Arbeit");
+  }
+
+  /** Get ALL tasks for a project including completed/on-hold (for display). */
+  getAllTasks(projectId: number): ZepTask[] {
+    return this.cache?.tasks[projectId] ?? [];
   }
 
   /** Get activities for a project */
@@ -186,7 +193,7 @@ export class ZepProjectStore {
 
   private async loadCacheFromDisk(): Promise<ProjectCache | null> {
     try {
-      const raw = await readFile(CACHE_FILE, "utf-8");
+      const raw = await readFile(this.cacheFile, "utf-8");
       const cache: ProjectCache = JSON.parse(raw);
       const age = Date.now() - new Date(cache.timestamp).getTime();
       if (age > CACHE_MAX_AGE_MS) return null;
@@ -199,7 +206,7 @@ export class ZepProjectStore {
   private async saveCacheToDisk(): Promise<void> {
     try {
       await mkdir(CACHE_DIR, { recursive: true });
-      await writeFile(CACHE_FILE, JSON.stringify(this.cache, null, 2));
+      await writeFile(this.cacheFile, JSON.stringify(this.cache, null, 2));
     } catch {
       // Non-critical: cache write failure
     }

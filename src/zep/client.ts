@@ -47,9 +47,18 @@ export class ZepClient {
     date: string,
     employeeId?: string
   ): Promise<ZepAttendance[]> {
+    return this.getAttendancesRange(date, date, employeeId);
+  }
+
+  /** Fetch attendances for a date range (optionally filtered by employee) */
+  async getAttendancesRange(
+    startDate: string,
+    endDate: string,
+    employeeId?: string
+  ): Promise<ZepAttendance[]> {
     const params: Record<string, string> = {
-      start_date: date,
-      end_date: date,
+      start_date: startDate,
+      end_date: endDate,
     };
     if (employeeId) params.employee_id = employeeId;
     return this.fetchAllPages<ZepAttendance>("/attendances", params);

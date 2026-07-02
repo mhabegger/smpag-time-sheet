@@ -33,9 +33,17 @@ Use `mcp__manictime-client__get_combined_activities` with:
 - fromTime: "YYYY-MM-DDT00:00:00" (start of day)
 - toTime: "YYYY-MM-DD+1T00:00:00" (end of day / start of next day)
 - Do NOT use overlapping date ranges — each day is exactly 00:00 to 24:00
-- fields: [{"name": "activityName"}, {"name": "groupName"}, {"name": "groupKey", "summaryType": "Application"}, {"name": "groupName", "summaryType": "WebSite"}]
-- Do NOT use the ComputerUsage active filter — it returns empty results. Fetch all activities and filter for "Active" entries in the parsed data.
+- fields: [{"name": "activityName"}, {"name": "summaryType"}, {"name": "groupName"}, {"name": "groupKey"}]
+  - **Always request `summaryType`** — it makes the dump self-describing (Application / WebSite / Document / ComputerUsage) so it parses deterministically. Without it, apps/sites/docs/states are ambiguous and parsing has to be guessed.
+- Do NOT use the ComputerUsage active filter — it returns empty results. The parser keeps only "Active" blocks for you.
 - Set maxRowCount to 10000
+
+**Parsing the result — use the committed parser, never improvise:**
+A full day almost always exceeds the inline token limit, so the MCP tool writes the JSON to a file and returns its path in the tool result. Do **NOT** read/parse that file by hand, and do **NOT** spawn a subagent that improvises `jq`/PowerShell/Node — ad-hoc script blocks trigger a permission prompt on every run. Instead run the deterministic parser on the returned path:
+```bash
+npx tsx src/manictime/parse-timeline.ts "<path-to-dump-from-tool-result>" 15
+```
+It prints a clean, chronological, **15-minute clock-aligned** timeline (apps + window titles + document/site context, with active-minutes per window), plus first/last active time and gaps >20min. The trailing number is the window size in minutes (default 15). If the tool ever returns data inline (a small day), write that JSON to a temp file and run the parser on it the same way. The parser reads columns by name and works with or without `summaryType`.
 
 ### 3b. Top applications summary
 Use `mcp__manictime-client__get_group_summary` with:
@@ -102,11 +110,12 @@ Now analyze the ManicTime data and classify each work period into ZEP projects/t
 - **Jira/Linear/GitHub** -> infer project from visible board/issue context
 - **Claude Code / AI tools** -> assign to whatever project the coding is for
 
-### Time Rounding:
-- Round all times to 15-minute boundaries (:00, :15, :30, :45)
-- Start times round DOWN, end times round UP (generous toward work time)
-- Minimum slot is 15 minutes
-- Merge adjacent slots with the same project/task into ranges
+### Time Rounding (HARD RULE — non-negotiable):
+- **Every `from` and `to` MUST land on a 15-minute boundary: minutes ∈ {00, 15, 30, 45}, seconds = 00.** The ONLY allowed exception is the end-of-day sentinel `23:59:00`. Times like `12:50`, `17:10`, `09:05` are invalid and must never appear in the table or the YAML.
+- Start times round DOWN, end times round UP (generous toward work time).
+- Minimum slot is 15 minutes. Merge adjacent slots with the same project/task into ranges.
+- The parser already emits clock-aligned 15-min windows — anchor your entry boundaries to those window edges.
+- **Self-check twice — once before showing the table, and again before writing `pending.yaml`:** scan every `from`/`to`; if any minute is not 00/15/30/45 (or seconds ≠ 00), fix it before proceeding. `submit.ts` also enforces this and aborts on any violation.
 
 ## Step 6: Present the timesheet
 
@@ -191,7 +200,7 @@ After writing pending.yaml, show its contents as a verification table. **Do NOT 
 npx tsx src/zep/submit.ts pending.yaml
 ```
 
-The submit script resolves project/task names to IDs, checks for conflicts, and submits.
+The submit script first validates that every `from`/`to` is on a 15-min boundary (except `23:59:00`) and aborts with a list of offenders if not — if that happens, fix the offending times in pending.yaml and rerun. It then resolves project/task names to IDs, checks for conflicts, and submits.
 Report results: how many submitted, any skipped (conflicts), any errors.
 
 ## Important Notes
@@ -209,9 +218,13 @@ Report results: how many submitted, any skipped (conflicts), any errors.
 - 26__SMPAG / 2 / mp = General email, calendar, admin correspondence
 - 26__SMPAG / 3 / sc = Strategy work (roadmaps, governance, onboarding process)
 - Wednesday 08:15-08:45 = recurring Jour Fixe consulting with S. Handke (CH Media) → P80133 / 1.2 (billable)
+- Friday from ~16:00 onwards = recurring "SMP / MusicMaster Sync" call → 26__SMPAG / 3 / sc (strategy creation and implementation)
+- Through August 2026: any EBU- and aircheck-related activity is most likely FIFA 2026 (World Cup) work. It will need rebooking onto a dedicated project later — for now ALWAYS include the keywords "EBU FIFA aircheck" in the entry note so these entries can be found and rebooked.
 - P80127 / 9_PM = VPM project management
 - Query ManicTime with full 00:00-24:00 window per day — no overlapping date ranges
 - The submit script auto-assigns colors based on project type (colors are sent to ZEP API)
 - The ZEP API does NOT support PUT/PATCH/DELETE on attendances — only GET and POST
 - Do NOT create temp .ts files for submission — use `pending.yaml` + `src/zep/submit.ts`
 - Always show table first for review, then write YAML, then submit only when explicitly asked
+- Parse the combined-activities dump ONLY with `npx tsx src/manictime/parse-timeline.ts <file>` — never improvise `jq`/PowerShell/Node or delegate parsing to a subagent (ad-hoc script blocks cause permission prompts every run)
+- Every entry time MUST be 15-min aligned (:00/:15/:30/:45, seconds 00), sole exception `23:59:00` — `submit.ts` enforces this and rejects the file otherwise
