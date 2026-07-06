@@ -100,11 +100,13 @@ export async function getDayActivities(date: string): Promise<Dump> {
   return callTool<Dump>("get_combined_activities", {
     fromTime: `${date}T00:00:00`,
     toTime: `${next}T00:00:00`,
+    // "<table>/<column>" field names — the ManicTime MCP schema as of mid-2026
+    // (the old flat names activityName/groupName/... return an empty dump).
     fields: [
-      { name: "activityName" },
-      { name: "summaryType" },
-      { name: "groupName" },
-      { name: "groupKey" },
+      { name: "activity/name" },
+      { name: "group/summaryType" },
+      { name: "group/name" },
+      { name: "group/key" },
     ],
     maxRowCount: 10000,
   });
@@ -129,11 +131,18 @@ export interface DayUsage {
   lockMin: number;
 }
 
+interface SummaryTable {
+  columns: string[];
+  rows: unknown[][];
+}
 interface SummaryDump {
-  combinedActivitySummaries: { columns: string[]; rows: unknown[][] };
-  timelineActivities: { columns: string[]; rows: unknown[][] };
-  groups: { columns: string[]; rows: unknown[][] };
-  timeBuckets: { columns: string[]; rows: unknown[][] };
+  combinedActivitySummaries: SummaryTable;
+  /** Pre-2026 MCP name for the activities table. */
+  timelineActivities?: SummaryTable;
+  /** Current MCP name for the activities table. */
+  activities?: SummaryTable;
+  groups: SummaryTable;
+  timeBuckets: SummaryTable;
 }
 
 /**
@@ -145,7 +154,7 @@ export async function getUsageRange(
   toDate: string
 ): Promise<Map<string, DayUsage>> {
   const dump = await callTool<SummaryDump>("get_combined_activity_summary", {
-    fields: [{ name: "groupName", summaryType: "ComputerUsage" }],
+    fields: [{ name: "group/name", summaryType: "ComputerUsage" }],
     summaryTypes: ["ComputerUsage"],
     fromDate,
     toDate,
@@ -153,21 +162,33 @@ export async function getUsageRange(
     maxRowCount: 2000,
   });
 
-  const col = (t: { columns: string[] }, name: string) =>
-    t.columns.indexOf(name);
+  // Tolerate both MCP schema generations (timelineActivities/groupName vs
+  // activities/name — ManicTime renamed tables and columns mid-2026).
+  const col = (t: { columns: string[] }, ...names: string[]) => {
+    for (const n of names) {
+      const i = t.columns.indexOf(n);
+      if (i !== -1) return i;
+    }
+    throw new Error(
+      `ManicTime summary table missing column ${names.join("/")} (has: ${t.columns.join(", ")})`
+    );
+  };
+
+  const acts = dump.activities ?? dump.timelineActivities;
+  if (!acts) throw new Error("ManicTime summary missing activities table");
 
   // groups: ref -> state name
   const gRef = col(dump.groups, "ref");
-  const gName = col(dump.groups, "groupName");
+  const gName = col(dump.groups, "name", "groupName");
   const groupName = new Map<number, string>();
   for (const r of dump.groups.rows)
     groupName.set(r[gRef] as number, (r[gName] as string).toLowerCase());
 
-  // timelineActivities: ref -> groupRef
-  const tRef = col(dump.timelineActivities, "ref");
-  const tGroup = col(dump.timelineActivities, "groupRef");
+  // activities: ref -> groupRef
+  const tRef = col(acts, "ref");
+  const tGroup = col(acts, "groupRef");
   const tlGroup = new Map<number, number>();
-  for (const r of dump.timelineActivities.rows)
+  for (const r of acts.rows)
     tlGroup.set(r[tRef] as number, r[tGroup] as number);
 
   // timeBuckets: ref -> date
@@ -179,7 +200,7 @@ export async function getUsageRange(
 
   const sDur = col(dump.combinedActivitySummaries, "duration");
   const sBucket = col(dump.combinedActivitySummaries, "timeBucketRef");
-  const sTl = col(dump.combinedActivitySummaries, "timelineActivityRef");
+  const sTl = col(dump.combinedActivitySummaries, "activityRef", "timelineActivityRef");
 
   const out = new Map<string, DayUsage>();
   for (const r of dump.combinedActivitySummaries.rows) {

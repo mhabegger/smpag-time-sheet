@@ -34,9 +34,15 @@ interface Tl {
   stateName?: string;
 }
 
-function col(table: Table, name: string, fallback: number): number {
-  const i = table.columns.indexOf(name);
-  return i === -1 ? fallback : i;
+/** Find the first matching column name — ManicTime's MCP renamed several
+ *  columns mid-2026 (groupName→name, groupKey→key, activityName→name,
+ *  timelineActivityRefs→activityRefs), so accept both generations. */
+function col(table: Table, names: string | string[], fallback: number): number {
+  for (const name of Array.isArray(names) ? names : [names]) {
+    const i = table.columns.indexOf(name);
+    if (i !== -1) return i;
+  }
+  return fallback;
 }
 
 function classify(
@@ -84,22 +90,30 @@ export function loadBlocks(dump: Dump): {
   lastActive: Date | null;
 } {
   const ca = dump.combinedActivities;
-  const ta = dump.timelineActivities;
+  // "timelineActivities" (pre-2026 MCP) / "activities" (current MCP)
+  const ta = dump.timelineActivities ?? dump.activities;
   const gr = dump.groups;
   if (!ca || !ta || !gr) {
     throw new Error(
-      "Dump missing combinedActivities/timelineActivities/groups tables"
+      "Dump missing combinedActivities/activities/groups tables"
     );
   }
 
   const gRef = col(gr, "ref", 0);
-  const gName = col(gr, "groupName", 1);
-  const gKey = col(gr, "groupKey", 2);
-  const groupMap = new Map<number, { name: string; key: string | null }>();
+  const gName = col(gr, ["groupName", "name"], 1);
+  const gKey = col(gr, ["groupKey", "key"], 2);
+  // Current MCP carries the summary type on the group.
+  const gSummaryIdx = gr.columns.indexOf("summaryType");
+  const groupMap = new Map<
+    number,
+    { name: string; key: string | null; summaryType?: string }
+  >();
   for (const r of gr.rows) {
     groupMap.set(r[gRef] as number, {
       name: (r[gName] as string) ?? "",
       key: (r[gKey] as string | null) ?? null,
+      summaryType:
+        gSummaryIdx !== -1 ? ((r[gSummaryIdx] as string) ?? undefined) : undefined,
     });
   }
 
@@ -113,7 +127,7 @@ export function loadBlocks(dump: Dump): {
   }
 
   const tRef = col(ta, "ref", 0);
-  const tName = col(ta, "activityName", 1);
+  const tName = col(ta, ["activityName", "name"], 1);
   const tGroup = col(ta, "groupRef", 2);
   const tSummaryIdx = ta.columns.indexOf("summaryType");
   const tlMap = new Map<number, Tl>();
@@ -125,6 +139,7 @@ export function loadBlocks(dump: Dump): {
       const v = r[tSummaryIdx];
       summaryType = typeof v === "string" ? v : stMap?.get(v as number);
     }
+    if (!summaryType) summaryType = group.summaryType;
     const kind = classify(summaryType, group.name, group.key);
     tlMap.set(ref, {
       activityName: (r[tName] as string) ?? "",
@@ -137,7 +152,7 @@ export function loadBlocks(dump: Dump): {
 
   const cStart = col(ca, "startTime", 0);
   const cEnd = col(ca, "endTime", 1);
-  const cRefs = col(ca, "timelineActivityRefs", 2);
+  const cRefs = col(ca, ["timelineActivityRefs", "activityRefs"], 2);
   const rows = [...ca.rows].sort(
     (a, b) =>
       new Date(a[cStart] as string).getTime() -
