@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 import { addDays, format, parseISO } from "date-fns";
 import {
+  AlertTriangle,
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
@@ -128,30 +129,50 @@ function DayView() {
   const dirtyRef = React.useRef(false);
   const latestRef = React.useRef({ date, entries, nonWork });
   latestRef.current = { date, entries, nonWork };
+  const [saveError, setSaveError] = React.useState<string | null>(null);
+  const trySave = React.useCallback(
+    (d: string, e: SuggestedEntry[], nw: NonWorkSegment[]) =>
+      saveDayEntries({ data: { date: d, suggestions: e, nonWork: nw } })
+        .then(() => setSaveError(null))
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[autosave] failed for ${d}:`, err);
+          // Re-mark dirty only while still on the same day — the flushes and
+          // the retry button then resend the current edits.
+          if (latestRef.current.date === d) dirtyRef.current = true;
+          setSaveError(`Saving ${d} failed: ${msg}`);
+        }),
+    []
+  );
   React.useEffect(() => {
     if (!dirtyRef.current) return;
     const t = setTimeout(() => {
       dirtyRef.current = false;
-      void saveDayEntries({ data: { date, suggestions: entries, nonWork } });
+      void trySave(date, entries, nonWork);
     }, 700);
     return () => {
       clearTimeout(t);
       if (dirtyRef.current && latestRef.current.date !== date) {
         dirtyRef.current = false;
-        void saveDayEntries({ data: { date, suggestions: entries, nonWork } });
+        void trySave(date, entries, nonWork);
       }
     };
-  }, [entries, nonWork, date]);
+  }, [entries, nonWork, date, trySave]);
   React.useEffect(
     () => () => {
       if (dirtyRef.current) {
         dirtyRef.current = false;
         const { date: d, entries: e, nonWork: nw } = latestRef.current;
-        void saveDayEntries({ data: { date: d, suggestions: e, nonWork: nw } });
+        void trySave(d, e, nw);
       }
     },
-    []
+    [trySave]
   );
+  const retrySave = () => {
+    dirtyRef.current = false;
+    const { date: d, entries: e, nonWork: nw } = latestRef.current;
+    void trySave(d, e, nw);
+  };
 
   const changeEntries = (next: SuggestedEntry[]) => {
     dirtyRef.current = true;
@@ -278,6 +299,15 @@ function DayView() {
           {analyzing && <Loader2 size={11} className="animate-spin" />}
           {meta.label}
         </Badge>
+        {saveError && (
+          <button
+            onClick={retrySave}
+            title={saveError}
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-destructive/50 bg-destructive/10 px-2 py-0.5 text-xs text-bad hover:bg-destructive/20"
+          >
+            <AlertTriangle size={11} /> unsaved edits — click to retry
+          </button>
+        )}
 
         <div className="ml-auto flex items-center gap-2">
           <TierSelector tier={tier} onChange={setTier} />
@@ -497,6 +527,13 @@ function DayView() {
         entries={entries}
         options={options}
         onSubmitted={() => router.invalidate()}
+        onPickTask={(id, patch) =>
+          changeEntries(
+            entries.map((e) =>
+              e.id === id ? { ...e, ...patch, locked: true } : e
+            )
+          )
+        }
       />
       <ScreenshotViewer
         shots={detail.screenshots}

@@ -9,9 +9,11 @@ import { ZepClient } from "../zep/client.js";
 import { ZepProjectStore, isBillable } from "../zep/projects.js";
 import { AttendanceManager } from "../zep/attendances.js";
 import {
+  AmbiguousTaskError,
   resolveEntry,
   validateAlignment,
   type SubmitEntry,
+  type TaskCandidate,
 } from "../zep/submit-lib.js";
 import { getEnv } from "../config/env.js";
 import type { ZepAttendance, CreateAttendanceInput } from "../zep/types.js";
@@ -236,10 +238,19 @@ export async function getProjectListText(date: string): Promise<string> {
 
 export type EntryOutcome = "submitted" | "skipped" | "error";
 
+export interface SubmitError {
+  entry: string;
+  error: string;
+  /** Index into the submitted entries array (for mapping back to UI rows). */
+  index?: number;
+  /** Present when the task name was ambiguous — ways it could be booked. */
+  candidates?: TaskCandidate[];
+}
+
 export interface WebSubmitResult {
   submitted: number;
   skipped: { from: string; to: string }[];
-  errors: { entry: string; error: string }[];
+  errors: SubmitError[];
   warnings: string[];
   /** Outcome per input entry, in the same order as the input array. */
   outcomes: { outcome: EntryOutcome; error?: string }[];
@@ -274,8 +285,8 @@ export async function submitEntries(
 
   const store = await storeForDate(entries[0].date);
   const warnings: string[] = [];
-  const errors: { entry: string; error: string }[] = [];
-  const resolved: (CreateAttendanceInput | null)[] = entries.map((e) => {
+  const errors: SubmitError[] = [];
+  const resolved: (CreateAttendanceInput | null)[] = entries.map((e, index) => {
     try {
       const r = resolveEntry(store, e);
       warnings.push(...r.warnings);
@@ -284,6 +295,8 @@ export async function submitEntries(
       errors.push({
         entry: `${e.from.slice(0, 5)}–${e.to.slice(0, 5)} ${e.project}/${e.task}`,
         error: err instanceof Error ? err.message : String(err),
+        index,
+        candidates: err instanceof AmbiguousTaskError ? err.candidates : undefined,
       });
       return null;
     }
@@ -309,7 +322,7 @@ export async function submitEntries(
 
   const outcomes: { outcome: EntryOutcome; error?: string }[] = [];
   const skipped: { from: string; to: string }[] = [];
-  const submitErrors: { entry: string; error: string }[] = [];
+  const submitErrors: SubmitError[] = [];
   let submitted = 0;
 
   for (const input of inputs) {

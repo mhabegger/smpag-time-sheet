@@ -390,7 +390,8 @@ export async function submitDay(
           submittedAt: new Date().toISOString(),
           submitted: result.submitted,
           skipped: result.skipped.length,
-          errors: result.errors,
+          // keep only the display fields — candidates/index are transient UI data
+          errors: result.errors.map(({ entry, error }) => ({ entry, error })),
         };
         // Entries that went into ZEP are no longer suggestions to review;
         // skipped/errored ones stay visible for another attempt.

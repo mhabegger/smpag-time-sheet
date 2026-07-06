@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { submitDayToZep } from "@/server/fns";
 import { timeToMin, fmtDuration, cn } from "@/lib/utils";
 import type { ProjectTaskOption, SuggestedEntry } from "@/lib/types";
+import type { TaskCandidate } from "@/zep/submit-lib";
 
 interface SubmitDialogProps {
   open: boolean;
@@ -14,9 +15,19 @@ interface SubmitDialogProps {
   entries: SuggestedEntry[];
   options: ProjectTaskOption[];
   onSubmitted: () => void;
+  /** Apply a task disambiguation pick to the underlying entry. */
+  onPickTask?: (id: string, patch: { task: string; subtask?: string }) => void;
 }
 
 type Phase = "review" | "submitting" | "done";
+
+/** An entry whose task name matched several ZEP tasks — needs a user pick. */
+interface Ambiguity {
+  id: string;
+  label: string;
+  taskName: string;
+  candidates: TaskCandidate[];
+}
 
 const endMinOf = (t: string) => (t === "23:59" ? 24 * 60 - 1 : timeToMin(t));
 
@@ -27,6 +38,7 @@ export function SubmitDialog({
   entries,
   options,
   onSubmitted,
+  onPickTask,
 }: SubmitDialogProps) {
   const validPairs = React.useMemo(
     () => new Set(options.map((o) => `${o.projectName} ${o.taskName}`)),
@@ -40,10 +52,11 @@ export function SubmitDialog({
   const [result, setResult] = React.useState<{
     submitted: number;
     skipped: { from: string; to: string }[];
-    errors: { entry: string; error: string }[];
+    errors: { entry: string; error: string; index?: number; candidates?: TaskCandidate[] }[];
     warnings: string[];
   } | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [ambiguities, setAmbiguities] = React.useState<Ambiguity[]>([]);
 
   React.useEffect(() => {
     if (open) {
@@ -55,6 +68,7 @@ export function SubmitDialog({
       setPhase("review");
       setResult(null);
       setError(null);
+      setAmbiguities([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -75,19 +89,51 @@ export function SubmitDialog({
   const submit = async () => {
     setPhase("submitting");
     setError(null);
+    setAmbiguities([]);
+    // Snapshot what we send so result.errors[].index maps back to entry ids.
+    const sent = selected;
     try {
       // Send the FULL entries as reviewed in this dialog — the server books
       // exactly what is on screen, independent of pending autosaves.
       const res = await submitDayToZep({
-        data: { date, entries: selected },
+        data: { date, entries: sent },
       });
-      setResult(res.result);
+      const r = res.result;
+      // Name resolution failed → nothing was booked. Stay in review so the
+      // user can resolve ambiguous tasks with one click and resubmit.
+      if (r.submitted === 0 && r.skipped.length === 0 && r.errors.length > 0) {
+        setAmbiguities(
+          r.errors.flatMap((er) => {
+            const entry = er.index != null ? sent[er.index] : undefined;
+            if (!entry || !er.candidates?.length) return [];
+            return [
+              {
+                id: entry.id,
+                label: `${entry.from}–${entry.to} ${entry.project}`,
+                taskName: entry.subtask ?? entry.task,
+                candidates: er.candidates,
+              },
+            ];
+          })
+        );
+        const plain = r.errors.filter((er) => !er.candidates?.length);
+        if (plain.length > 0)
+          setError(plain.map((er) => `✗ ${er.entry}: ${er.error}`).join("\n"));
+        setPhase("review");
+        return;
+      }
+      setResult(r);
       setPhase("done");
       onSubmitted();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setPhase("review");
     }
+  };
+
+  const pickCandidate = (a: Ambiguity, c: TaskCandidate) => {
+    onPickTask?.(a.id, { task: c.task, subtask: c.subtask });
+    setAmbiguities((cur) => cur.filter((x) => x.id !== a.id));
   };
 
   return (
@@ -157,6 +203,34 @@ export function SubmitDialog({
               })}
             </tbody>
           </table>
+
+          {ambiguities.length > 0 && (
+            <div className="mt-3 space-y-2 rounded-md border border-warn/40 bg-warn/10 p-2 text-sm">
+              <div className="flex items-center gap-1.5 font-medium text-warn">
+                <AlertTriangle size={13} /> Nothing was submitted — some task names
+                match several ZEP tasks. Pick the intended one, then submit again:
+              </div>
+              {ambiguities.map((a) => (
+                <div key={a.id} className="pl-5">
+                  <div className="mb-1 text-xs text-muted-foreground">
+                    {a.label} — “{a.taskName}”:
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {a.candidates.map((c) => (
+                      <Button
+                        key={c.path}
+                        size="sm"
+                        variant="outline"
+                        onClick={() => pickCandidate(a, c)}
+                      >
+                        {c.path}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {error && (
             <div className="mt-3 rounded-md border border-destructive/50 bg-destructive/10 p-2 text-sm whitespace-pre-wrap">
