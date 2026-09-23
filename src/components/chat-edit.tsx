@@ -37,7 +37,24 @@ export function ChatEdit({
   const [busy, setBusy] = React.useState(false);
   const [reply, setReply] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const ref = React.useRef<HTMLInputElement>(null);
+  const ref = React.useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow the instruction box with its content (capped, then scrolls).
+  const resize = React.useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
+  }, []);
+  React.useLayoutEffect(resize, [value, resize]);
+
+  // Picking a row/gap reference focuses the box so you can type right away.
+  const prevRefCount = React.useRef(refs.length);
+  React.useEffect(() => {
+    if (refs.length > prevRefCount.current) ref.current?.focus({ preventScroll: true });
+    prevRefCount.current = refs.length;
+  }, [refs.length]);
+  const floating = refs.length > 0;
 
   const send = async (text: string) => {
     const instruction = text.trim();
@@ -65,7 +82,10 @@ export function ChatEdit({
     <div
       className={cn(
         "rounded-md border border-border bg-card/60 p-3 transition-opacity",
-        busy && "opacity-80"
+        busy && "opacity-80",
+        // With references selected the parent section pins the composer to the
+        // top of the viewport (see day route) — make it opaque and raised.
+        floating && "bg-card shadow-2xl ring-1 ring-primary/30"
       )}
       data-chat-edit
     >
@@ -93,17 +113,22 @@ export function ChatEdit({
         </div>
       )}
 
-      <div className="flex items-center gap-2">
-        <Sparkles size={14} className="shrink-0 text-primary" />
+      <div className="flex items-start gap-2">
+        <Sparkles size={14} className="mt-2.5 shrink-0 text-primary" />
         <div className="relative flex-1">
-          <input
+          <textarea
             ref={ref}
+            rows={1}
             value={value}
             disabled={busy}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") send(value);
-              if (e.key === "Escape") (e.target as HTMLInputElement).blur();
+              // Enter sends; Shift+Enter inserts a line break.
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                void send(value);
+              }
+              if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur();
             }}
             placeholder={
               refs.length > 0
@@ -111,15 +136,15 @@ export function ChatEdit({
                 : "Ask to change the entries — merge, split, reclassify, rewrite a note…"
             }
             className={cn(
-              "h-9 w-full rounded-md border border-border bg-input/40 px-3 pr-9 text-sm outline-none focus:border-ring focus:ring-1 focus:ring-ring",
+              "block min-h-9 w-full resize-none overflow-y-auto rounded-md border border-border bg-input/40 px-3 py-2 pr-9 text-sm leading-snug outline-none focus:border-ring focus:ring-1 focus:ring-ring",
               busy && "cursor-not-allowed text-muted-foreground/50 placeholder:text-muted-foreground/40"
             )}
           />
           <button
             onClick={() => send(value)}
             disabled={busy || !value.trim()}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40 cursor-pointer"
-            title="Apply (Enter)"
+            className="absolute bottom-1.5 right-1.5 rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40 cursor-pointer"
+            title="Apply (Enter) · Shift+Enter for a new line"
           >
             {busy ? <Loader2 size={15} className="animate-spin" /> : <CornerDownLeft size={15} />}
           </button>

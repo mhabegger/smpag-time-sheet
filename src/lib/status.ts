@@ -5,7 +5,7 @@ export const STATUS_META: Record<
   { label: string; cellClass: string; dotClass: string }
 > = {
   empty: {
-    label: "No activity",
+    label: "Nothing to book",
     cellClass: "bg-secondary/25 text-muted-foreground/50",
     dotClass: "bg-muted-foreground/30",
   },

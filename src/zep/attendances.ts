@@ -1,6 +1,7 @@
 import { getEnv } from "../config/env.js";
 import { ZepClient } from "./client.js";
 import type { ZepAttendance, CreateAttendanceInput } from "./types.js";
+import { endMinutes } from "./submit-lib.js";
 
 export interface TimeConflict {
   existing: ZepAttendance;
@@ -105,7 +106,7 @@ export class AttendanceManager {
       return h * 60 + m;
     };
     const start = Math.max(toMin(from1), toMin(from2));
-    const end = Math.min(toMin(to1), toMin(to2));
+    const end = Math.min(endMinutes(to1), endMinutes(to2));
     return Math.max(0, end - start);
   }
 }

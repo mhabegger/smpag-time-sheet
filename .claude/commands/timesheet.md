@@ -92,15 +92,17 @@ Now analyze the ManicTime data and classify each work period into ZEP projects/t
 - Mark filtered time as "private/break" - don't track it
 
 ### Project Mapping Knowledge:
-- **Daily standup** (08:45-09:00 weekdays, usually Teams) -> 26__SMPAG / 1.1 Developer
-- **Scrum meetings** (sprint planning, retro, review) -> 26__SMPAG / 1.1 Developer (Scrum-related activities ONLY)
-- **Monday afternoon** = Sprint Review + Retro + short Planning session. Track as 26__SMPAG / 1.1 (ceremonies) and 26__SMPAG / 1.3 (PO/planning work). Activities during this block (project reviews, demos, strategy discussions) are part of the sprint ceremonies — do NOT split into individual project entries.
+- **Recurring meetings are NOT tied to a weekday.** The schedule changes (the sprint review/retro moved from Monday to Wednesday during 2026; the Wednesday Jour Fixe with S. Handke stopped around July/August 2026). Only book a recurring meeting when the day's activity (Teams/window titles/OCR) or the user confirms it — if unsure, ask the user instead of assuming a weekday slot. (The web app reads the Outlook calendar for this.)
+- **Daily standup / "Daily Call"** -> 26__SMPAG / 1.1 Developer
+- **Scrum meetings** (sprint planning, retro, review) -> 26__SMPAG / 1.1 Developer (Scrum-related activities ONLY), PO/planning work around them -> 26__SMPAG / 1.3. Activities during the ceremony block (project reviews, demos, strategy discussions) are part of the ceremonies — do NOT split into individual project entries.
 - **Internal tooling / research / experimentation** -> 26__SMPAG / 5 Research & Dev
 - **General email in Outlook** (reading/writing emails, calendar) -> 26__SMPAG / 2 Administration / mp
 - **Zendesk tickets about MusicMaster** (visible customer name) -> MusicMaster / {customer name}
 - **Zendesk tickets about aircheck** -> aircheck / {customer name}
 - **Zendesk tickets about musiccompanion** -> musiccompanion / {customer name}
 - **Zendesk tickets about managedstreaming or managedradio** -> managedstreaming or managedradio / {customer name}
+- **SSATR mentioned together with engine configs or managedradio** (tickets, issues, screens) -> 26-A-MR (deliver.media managedradio) / CH-SSATR
+- **SSATR Mainplayout migration work** (migration planning, "Variante 4", playout system engineering) -> A261247 (SSATR | Migration Mainplayout (Variante 4)) / 1 System Engineering
 - **Frank Kok / TopOfMind** correspondence -> 26__deliver.media / 5.2 Partner Management
 - **VS Code / development work** -> determine from repo path or file context:
   - mosaic, aircheck, musiccompanion, managedradio repos -> 26__deliver.media / relevant task
@@ -111,7 +113,7 @@ Now analyze the ManicTime data and classify each work period into ZEP projects/t
 - **Claude Code / AI tools** -> assign to whatever project the coding is for
 
 ### Time Rounding (HARD RULE — non-negotiable):
-- **Every `from` and `to` MUST land on a 15-minute boundary: minutes ∈ {00, 15, 30, 45}, seconds = 00.** The ONLY allowed exception is the end-of-day sentinel `23:59:00`. Times like `12:50`, `17:10`, `09:05` are invalid and must never appear in the table or the YAML.
+- **Every `from` and `to` MUST land on a 15-minute boundary: minutes ∈ {00, 15, 30, 45}, seconds = 00.** End of day is written `00:00:00` as the `to` time (midnight); `23:59:00` is also accepted and converted. Times like `12:50`, `17:10`, `09:05` are invalid and must never appear in the table or the YAML.
 - Start times round DOWN, end times round UP (generous toward work time).
 - Minimum slot is 15 minutes. Merge adjacent slots with the same project/task into ranges.
 - The parser already emits clock-aligned 15-min windows — anchor your entry boundaries to those window edges.
@@ -177,7 +179,7 @@ When the user is happy with the table, write a `pending.yaml` file.
 entries:
   - date: "YYYY-MM-DD"
     from: "HH:mm:ss"
-    to: "HH:mm:ss"      # Use "23:59:00" for end of day (ZEP API rejects "24:00:00" and "00:00:00")
+    to: "HH:mm:ss"      # Use "00:00:00" for end of day (midnight); ZEP rejects "24:00:00" and "23:59:00"
     project: ProjectName
     task: LeafTaskName   # Always use the LEAF task name (the actual bookable task, not a parent)
     billable: true/false
@@ -192,7 +194,7 @@ entries:
 - **deliver.media tasks** have compound names — always use the full name: `"1.11 ONE/apps"` (not `"1.11"`), `"1.1 aircheck."` (not `"1.1"`), `"musiccompanion. AI voice"`, etc. SMPAG tasks use short names (`"1.1"`, `"mp"`, `"sys"`).
 - `activity_id` is always "S" (hardcoded) — do NOT confuse ZEP activities with task/subtask
 
-**IMPORTANT:** The ZEP API does not accept "24:00:00" or "00:00:00" as end times (it interprets them as before the start time). Use "23:59:00" instead and warn the user to manually fix it in ZEP UI if needed.
+**IMPORTANT:** For an entry that runs until midnight use `to: "00:00:00"` on the same date — that is how ZEP stores end of day. ZEP rejects "24:00:00", and "23:59:00" fails its 15-minute grid (the submit script converts "23:59:00" to "00:00:00" automatically).
 
 ### 8c. Confirm and Submit
 After writing pending.yaml, show its contents as a verification table. **Do NOT run the submit script until the user explicitly confirms** (e.g., "yes", "go", "submit"). When confirmed, run:
@@ -200,7 +202,7 @@ After writing pending.yaml, show its contents as a verification table. **Do NOT 
 npx tsx src/zep/submit.ts pending.yaml
 ```
 
-The submit script first validates that every `from`/`to` is on a 15-min boundary (except `23:59:00`) and aborts with a list of offenders if not — if that happens, fix the offending times in pending.yaml and rerun. It then resolves project/task names to IDs, checks for conflicts, and submits.
+The submit script first validates that every `from`/`to` is on a 15-min boundary (`00:00:00`/`23:59:00` allowed as end of day) and aborts with a list of offenders if not — if that happens, fix the offending times in pending.yaml and rerun. It then resolves project/task names to IDs, checks for conflicts, and submits.
 Report results: how many submitted, any skipped (conflicts), any errors.
 
 ## Important Notes
@@ -210,16 +212,17 @@ Report results: how many submitted, any skipped (conflicts), any errors.
 - Learn from corrections: if the user corrects you, note the pattern for future reference
 - The user works at SMPAG, main computer is LAPTOP-GEQKBNM5
 - Time entries use the format HH:mm:ss for ZEP API (e.g., "09:00:00")
-- Time format: "00:00:00" = start of day, "23:59:00" = end of day (ZEP rejects 24:00:00). "to" must be > "from"
+- Time format: "00:00:00" as `from` = start of day; as `to` it means end of day (midnight). ZEP enforces a 15-min grid, so "23:59:00" is rejected — the submit script converts it to "00:00:00". "to" must be after "from"
 - The employee_id comes from the ZEP_EMPLOYEE_ID env var
 - The default activity_id is "S" (required field, cannot be empty)
 - 26__SMPAG / 1.1 Developer = Scrum ceremonies ONLY (standups, sprint meetings), NOT general dev work
 - 26__SMPAG / 5 = Research & Dev for internal tooling, research, experimentation
 - 26__SMPAG / 2 / mp = General email, calendar, admin correspondence
 - 26__SMPAG / 3 / sc = Strategy work (roadmaps, governance, onboarding process)
-- Wednesday 08:15-08:45 = recurring Jour Fixe consulting with S. Handke (CH Media) → P80133 / 1.2 (billable)
-- Friday from ~16:00 onwards = recurring "SMP / MusicMaster Sync" call → 26__SMPAG / 3 / sc (strategy creation and implementation)
-- Through August 2026: any EBU- and aircheck-related activity is most likely FIFA 2026 (World Cup) work. It will need rebooking onto a dedicated project later — for now ALWAYS include the keywords "EBU FIFA aircheck" in the entry note so these entries can be found and rebooked.
+- Jour Fixe consulting with S. Handke (CH Media) → P80133 / 1.2 (billable) — only when it actually took place (no longer weekly since ~July/August 2026)
+- "SMP / MusicMaster Sync" call → 26__SMPAG / 3 / sc (strategy creation and implementation) — only when it actually took place
+- Through August 2026: activity with an explicit EBU or FIFA context is most likely FIFA 2026 (World Cup) work. It will need rebooking onto a dedicated project later — include the keywords "EBU FIFA aircheck" in those entry notes so they can be found and rebooked. Only tag entries with a clear EBU/FIFA signal; plain aircheck development without such context must NOT get the tag.
+- TeamViewer sessions to CH Media broadcast machines (names like "Broadcast Pipeline TV-DLM…") → P80133. Speech-to-text / S2T topics → TVR task; regular workflow topics → TVN task (most of the time).
 - P80127 / 9_PM = VPM project management
 - Query ManicTime with full 00:00-24:00 window per day — no overlapping date ranges
 - The submit script auto-assigns colors based on project type (colors are sent to ZEP API)
@@ -227,4 +230,4 @@ Report results: how many submitted, any skipped (conflicts), any errors.
 - Do NOT create temp .ts files for submission — use `pending.yaml` + `src/zep/submit.ts`
 - Always show table first for review, then write YAML, then submit only when explicitly asked
 - Parse the combined-activities dump ONLY with `npx tsx src/manictime/parse-timeline.ts <file>` — never improvise `jq`/PowerShell/Node or delegate parsing to a subagent (ad-hoc script blocks cause permission prompts every run)
-- Every entry time MUST be 15-min aligned (:00/:15/:30/:45, seconds 00), sole exception `23:59:00` — `submit.ts` enforces this and rejects the file otherwise
+- Every entry time MUST be 15-min aligned (:00/:15/:30/:45, seconds 00), end of day = `00:00:00` — `submit.ts` enforces this and rejects the file otherwise

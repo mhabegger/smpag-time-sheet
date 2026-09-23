@@ -10,6 +10,7 @@ import { ZepProjectStore, isBillable } from "../zep/projects.js";
 import { AttendanceManager } from "../zep/attendances.js";
 import {
   AmbiguousTaskError,
+  endMinutes,
   resolveEntry,
   validateAlignment,
   type SubmitEntry,
@@ -110,6 +111,9 @@ function toMin(t: string): number {
 
 const hhmm = (t: string) => t.slice(0, 5);
 
+/** ZEP end time → the app's "HH:mm", mapping ZEP's end of day (00:00) to "23:59". */
+const endHhmm = (t: string) => (endMinutes(t) === 24 * 60 ? "23:59" : hhmm(t));
+
 /** Attendances for a date range grouped by day (this employee only). */
 export async function getAttendancesByDay(
   startDate: string,
@@ -134,7 +138,7 @@ export async function getAttendancesByDay(
 }
 
 export function attendanceMinutes(list: ZepAttendance[]): number {
-  return list.reduce((sum, a) => sum + Math.max(0, toMin(a.to) - toMin(a.from)), 0);
+  return list.reduce((sum, a) => sum + Math.max(0, endMinutes(a.to) - toMin(a.from)), 0);
 }
 
 /** Resolve attendance rows to display entries using the month's project cache. */
@@ -157,7 +161,7 @@ export async function toEntryViews(
     return {
       id: a.id,
       from: hhmm(a.from),
-      to: hhmm(a.to),
+      to: endHhmm(a.to),
       project: proj?.name ?? String(a.project_id),
       task: task?.name ?? String(a.project_task_id),
       billable: a.billable,
@@ -273,10 +277,9 @@ export async function submitEntries(
   }
 
   // Reject overlapping entries within the batch itself.
-  const endMin = (t: string) => (t === "23:59:00" ? 24 * 60 : toMin(t));
   const sorted = [...entries].sort((a, b) => toMin(a.from) - toMin(b.from));
   for (let i = 1; i < sorted.length; i++) {
-    if (toMin(sorted[i].from) < endMin(sorted[i - 1].to)) {
+    if (toMin(sorted[i].from) < endMinutes(sorted[i - 1].to)) {
       throw new Error(
         `Entries overlap: ${sorted[i - 1].from.slice(0, 5)}–${sorted[i - 1].to.slice(0, 5)} and ${sorted[i].from.slice(0, 5)}–${sorted[i].to.slice(0, 5)}. Fix the times first.`
       );
@@ -328,7 +331,7 @@ export async function submitEntries(
   for (const input of inputs) {
     if (conflictSet.has(`${input.from}-${input.to}`)) {
       outcomes.push({ outcome: "skipped" });
-      skipped.push({ from: input.from.slice(0, 5), to: input.to.slice(0, 5) });
+      skipped.push({ from: input.from.slice(0, 5), to: endHhmm(input.to) });
       continue;
     }
     try {
@@ -344,7 +347,7 @@ export async function submitEntries(
           : String(err);
       outcomes.push({ outcome: "error", error: msg });
       submitErrors.push({
-        entry: `${input.from.slice(0, 5)}–${input.to.slice(0, 5)}`,
+        entry: `${input.from.slice(0, 5)}–${endHhmm(input.to)}`,
         error: msg,
       });
     }

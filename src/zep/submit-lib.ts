@@ -49,21 +49,32 @@ export function getEntryColor(e: SubmitEntry): string {
 }
 
 /**
+ * End of day as ZEP stores it: `to` = "00:00:00" on the SAME date. ZEP now
+ * enforces its minute grid, so the old "23:59:00" sentinel is rejected (422);
+ * "23:59:00" is still accepted as input and converted when submitting.
+ */
+export const ZEP_END_OF_DAY = "00:00:00";
+
+/** Minutes for an END time — "00:00"/"23:59" (end of day) count as 24:00. */
+export function endMinutes(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  if ((h === 0 && m === 0) || (h === 23 && m === 59)) return 24 * 60;
+  return h * 60 + m;
+}
+
+/**
  * Hard invariant: every time must land on a 15-minute boundary (:00/:15/:30/:45)
- * with zero seconds. The only allowed exception is the end-of-day sentinel
- * "23:59:00" (ZEP rejects "24:00:00"/"00:00:00" as an end time).
- * Returns an error string or null when valid.
+ * with zero seconds. End of day is "00:00:00" (or the legacy "23:59:00",
+ * converted on submit). Returns an error string or null when valid.
  */
 export function alignmentError(t: string, isEnd: boolean): string | null {
-  if (isEnd && t === "23:59:00") return null;
+  if (isEnd && (t === "23:59:00" || t === ZEP_END_OF_DAY)) return null;
   const m = /^(\d{2}):(\d{2}):(\d{2})$/.exec(t);
   if (!m) return `"${t}" is not HH:mm:ss`;
   const hh = +m[1];
   const mm = +m[2];
   const ss = +m[3];
-  if (hh > 23) return `"${t}" is not a valid time (ZEP rejects 24:00:00 — use 23:59:00)`;
-  if (isEnd && t === "00:00:00")
-    return `"00:00:00" is not a valid end time (use 23:59:00 for end of day)`;
+  if (hh > 23) return `"${t}" is not a valid time (ZEP rejects 24:00:00 — use 00:00:00 for end of day)`;
   if (ss !== 0) return `"${t}" has non-zero seconds`;
   if (mm % 15 !== 0) return `"${t}" is not on a 15-min boundary (:00/:15/:30/:45)`;
   return null;
@@ -85,7 +96,7 @@ export function validateAlignment(entries: SubmitEntry[]): string[] {
     if (
       /^\d{2}:\d{2}:\d{2}$/.test(e.from) &&
       /^\d{2}:\d{2}:\d{2}$/.test(e.to) &&
-      toMinutes(e.to) <= toMinutes(e.from)
+      endMinutes(e.to) <= toMinutes(e.from)
     ) {
       errors.push(
         `${e.date} ${e.from}-${e.to} (${e.project}/${e.task}): "to" must be after "from"`
@@ -255,7 +266,7 @@ export function resolveEntry(
       employee_id: env.ZEP_EMPLOYEE_ID,
       date: e.date,
       from: e.from,
-      to: e.to,
+      to: e.to === "23:59:00" ? ZEP_END_OF_DAY : e.to,
       project_id: proj.id,
       project_task_id: resolvedTask.id,
       activity_id: "S",

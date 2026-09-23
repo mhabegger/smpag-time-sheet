@@ -9,7 +9,7 @@ export const EDIT_RULES = `
 Key rules when editing timesheet entries:
 - Times are "HH:mm" on 15-min boundaries (:00/:15/:30/:45); "23:59" = end of day. Do not create overlaps.
 - "task" must be the exact LEAF task name from the project list; deliver.media task names are compound ("1.11 ONE/apps", "1.1 aircheck.", "2.1 cloud", "5.1"), SMPAG are short ("mp","1.1","5","cre","acc").
-- Project cheatsheet: 26__SMPAG=internal (standup/scrum=1.1, email/admin=mp, R&D=5, finance=cre/acc, strategy=3/sc); 26__deliver.media=product; P80127=VPM (PM=9_PM, phase2="2 Phase 2"); P80133=CH Media/CHM (TV=1_TVN, consulting=1.2); 26-A-EN=SRG broadcaster engine logs (CH-RSI/CH-RTS/...); A261244=Swiss1 SCTE. "Dev Team" not "Les Welsches". Through Aug 2026 keep "EBU FIFA aircheck" in aircheck/EBU notes.
+- Project cheatsheet: 26__SMPAG=internal (standup/scrum=1.1, email/admin=mp, R&D=5, finance=cre/acc, strategy=3/sc); 26__deliver.media=product; P80127=VPM (PM=9_PM, phase2="2 Phase 2"); P80133=CH Media/CHM (TV=1_TVN, consulting=1.2); 26-A-EN=SRG broadcaster engine logs (CH-RSI/CH-RTS/...); 26-A-MR=managedradio customers (SSATR + engine configs/managedradio = CH-SSATR); A261247=SSATR Migration Mainplayout (task "1" System Engineering); A261244=Swiss1 SCTE. TeamViewer to CHM "Broadcast Pipeline TV-DLM…" machines = P80133 (S2T topics=TVR, regular workflows=TVN). "Dev Team" not "Les Welsches". Through Aug 2026 add "EBU FIFA aircheck" ONLY to notes with an explicit EBU/FIFA context, never to plain aircheck work.
 `;
 
 export const CLASSIFICATION_RULES = `
@@ -31,11 +31,12 @@ You produce timesheet entries for the WHOLE active day.
 - Email from/to mh@h3in.ch / mh@h3in.com (UNLESS clearly product testing)
 
 ## Project mapping knowledge
-- Daily standup (08:45-09:00 weekdays, Teams) -> project "26__SMPAG", task "1.1"
-- Scrum ceremonies (sprint planning/retro/review) -> 26__SMPAG / 1.1 — ceremonies ONLY, not general dev
-- Monday afternoon = Sprint Review + Retro + Planning: book as 26__SMPAG / 1.1 (ceremonies) and 26__SMPAG / 1.3 (PO/planning work). Do NOT split activities during this block into individual projects.
-- Wednesday 08:15-08:45 = recurring Jour Fixe with S. Handke (CH Media) -> P80133 / 1.2 (billable)
-- Friday from ~16:00 = recurring "SMP / MusicMaster Sync" call -> 26__SMPAG / 3 / sc (subtask sc under 3)
+- Recurring meetings: WHEN they happen comes from the Outlook calendar (and Teams/window titles/OCR) for THIS day — never from the weekday or clock time alone. The schedule changes over time (e.g. the sprint review/retro moved from Monday to Wednesday during 2026; the Wednesday Jour Fixe with S. Handke stopped around July/August 2026), so a weekday habit is NOT evidence. If neither the calendar nor the activity shows a meeting, it did not happen. How to book them when they DO appear:
+  - Daily standup / "Daily Call" -> 26__SMPAG / 1.1
+  - Sprint review / retro / planning (subjects with Sprint, Review, Retro, Planning) -> 26__SMPAG / 1.1 for the ceremony, 26__SMPAG / 1.3 for PO/planning work around it. Do NOT split activities during the ceremony block into individual projects.
+  - Jour Fixe with S. Handke / CH Media -> P80133 / 1.2 (billable)
+  - "SMP / MusicMaster Sync" call -> 26__SMPAG / 3 / sc (subtask sc under 3)
+- Scrum ceremonies -> 26__SMPAG / 1.1 — ceremonies ONLY, never general dev work
 - Internal tooling / research / experimentation / AI tooling setup -> 26__SMPAG / 5
 - General email/calendar in Outlook + Teams chats -> 26__SMPAG / 2 / mp (task "mp")
 - Strategy work (roadmaps, governance, onboarding processes) -> 26__SMPAG / 3 / sc
@@ -45,16 +46,19 @@ You produce timesheet entries for the WHOLE active day.
 - VS Code / repo work: mosaic, aircheck, musiccompanion, managedradio repos -> 26__deliver.media (matching task); CHM-related repos -> CHM project (P80133); VPM-related repos -> P80127
 - P80127 = VPM: task "9_PM" for project management, "2 Phase 2" for phase-2 work (TeamViewer to audio servers, WideOrbit/WFS config)
 - P80133 = CH Media (CHM): TV channel work task "1_TVN", consulting task "1.2"
+- TeamViewer sessions to CH Media broadcast machines (names like "Broadcast Pipeline TV-DLM…") -> P80133. Within those: speech-to-text / S2T topics -> the TVR task; regular workflow topics -> the TVN task (most of the time)
 - P80136 = WDR
 - A261244 = Swiss1 TV SCTE consulting (billable) — NOT 26-A-AC
 - SRG broadcaster engine/MusicMaster PROD log investigations (RSI/RTS/SRF...) -> project "26-A-EN", task "CH-xxx" (e.g. CH-RSI, CH-RTS) — NOT deliver.media engine work
+- SSATR mentioned in tickets/issues/screens together with engine configs or managedradio -> project "26-A-MR" (deliver.media managedradio), task "CH-SSATR" — NOT generic deliver.media work
+- SSATR Mainplayout migration work (migration planning, "Variante 4", playout system engineering) -> project "A261247" (SSATR | Migration Mainplayout (Variante 4)), task "1" (System Engineering)
 - COULEUR3 -> 26-A-EN / CH-RTS
 - Elin = marketing topics -> SMPAG marketing
 - Plesk = cloud infrastructure -> 26__deliver.media / 2.1 cloud
 - Teams meetings -> infer from title and participants
 - Jira/Linear/GitHub -> infer project from board/issue context
 - Claude Code / AI tools -> assign to whatever project the work is for
-- Through August 2026: EBU- and aircheck-related activity is most likely FIFA 2026 World Cup work. ALWAYS include the keywords "EBU FIFA aircheck" in those entry notes (for later rebooking).
+- Through August 2026: activity whose context is clearly EBU- or FIFA-related is most likely FIFA 2026 World Cup work — include the keywords "EBU FIFA aircheck" in THOSE entry notes (for later rebooking). Only add this tag when there is an explicit EBU or FIFA signal (window titles, tickets, meeting names, OCR); plain aircheck development or other work WITHOUT such a signal must NOT get the tag.
 - deliver.media task names are compound — use the FULL name: "1.11 ONE/apps", "1.1 aircheck.", "musiccompanion. AI voice", "musiccompanion.", "2.1 cloud", "5.1". SMPAG tasks use short names ("1.1", "mp", "sys", "5", "cre", "acc", "gl", "rz", "präs").
 - In notes, write "Dev Team" instead of "Les Welsches".
 - When truly unclear which customer/project, use project "_26-Unclear/Unklar" task "unklar" and describe what was seen.

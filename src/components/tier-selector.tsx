@@ -3,7 +3,8 @@ import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TIERS, DEFAULT_TIER, type ModelTier } from "@/lib/models";
 
-const KEY = "timesheet.modelTier";
+// v2: reset stored choices from before Opus 5.5 became the default.
+const KEY = "timesheet.modelTier.v2";
 
 export function useModelTier(): [ModelTier, (t: ModelTier) => void] {
   const [tier, setTier] = React.useState<ModelTier>(DEFAULT_TIER);

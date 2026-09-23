@@ -17,6 +17,7 @@ import {
 } from "./manictime.js";
 import { renderTimelineText, hhmm } from "../manictime/timeline-lib.js";
 import { listThumbStrip } from "./screenshots.js";
+import { getDayCalendar } from "./calendar.js";
 import {
   getAttendancesByDay,
   toEntryViews,
@@ -40,7 +41,7 @@ import type {
   TimelineBucket,
 } from "../lib/types.js";
 import type { Dump } from "../manictime/timeline-lib.js";
-import type { SubmitEntry } from "../zep/submit-lib.js";
+import { endMinutes, ZEP_END_OF_DAY, type SubmitEntry } from "../zep/submit-lib.js";
 
 /* ------------------------------------------------------------------ */
 /* Dump cache — past days are immutable, today gets a short TTL.       */
@@ -53,6 +54,11 @@ interface DumpCacheEntry {
 }
 const g = globalThis as { __tsDumpCache?: Map<string, DumpCacheEntry> };
 const dumpCache = (g.__tsDumpCache ??= new Map<string, DumpCacheEntry>());
+
+/** Drop a day's cached dump so the next load re-queries ManicTime. */
+export function invalidateDayDump(date: string): void {
+  dumpCache.delete(date);
+}
 
 export async function getDayDump(date: string): Promise<Dump> {
   const today = format(new Date(), "yyyy-MM-dd");
@@ -110,14 +116,25 @@ function resolveStatus(opts: {
   const covered = zepMin > 0 && zepMin >= activeMin * 0.6;
   if (covered) return "submitted";
   if (record && record.suggestions.length > 0) return "analyzed";
-  if (record?.status === "analyzed") return "analyzed";
+  // Analyzed with nothing left to book (all private/away, or every row
+  // removed) → the day is settled, never "suggestions ready".
+  if (record?.analysis && (record.status === "analyzed" || record.status === "empty"))
+    return zepMin > 0 ? "submitted" : "empty";
   if (activeMin < 15) return zepMin > 0 ? "submitted" : "empty";
   if (zepMin > 0) return "partial";
   return "missing";
 }
 
-/** Self-heal records left in "analyzing" by a dead queue (server restart). */
+/**
+ * Self-heal stale statuses: records left in "analyzing" by a dead queue
+ * (server restart), and "analyzed" days with nothing left to book.
+ */
 async function reconcileStaleAnalyzing(record: DayRecord): Promise<DayRecord> {
+  if (record.status === "analyzed" && record.suggestions.length === 0 && record.analysis) {
+    return updateDay(record.date, (r) => {
+      if (r.status === "analyzed" && r.suggestions.length === 0) r.status = "empty";
+    });
+  }
   if (record.status !== "analyzing" || isQueued(record.date)) return record;
   return updateDay(record.date, (r) => {
     r.status = r.suggestions.length > 0 ? "analyzed" : r.error ? "error" : "missing";
@@ -148,7 +165,7 @@ export async function getDashboardData(
     const zepList = zepByDay.get(date) ?? [];
     const zepMin = zepList.reduce(
       (s, a) =>
-        s + Math.max(0, timeToMin(a.to.slice(0, 5)) - timeToMin(a.from.slice(0, 5))),
+        s + Math.max(0, endMinutes(a.to) - timeToMin(a.from.slice(0, 5))),
       0
     );
 
@@ -208,7 +225,7 @@ export async function getMonthData(month?: string): Promise<import("../lib/types
       const activeMin = Math.round((usage as Map<string, { activeMin: number }>).get(date)?.activeMin ?? 0);
       const zepList = (zepByDay as Map<string, { from: string; to: string }[]>).get(date) ?? [];
       const zepMin = zepList.reduce(
-        (s, a) => s + Math.max(0, timeToMin(a.to.slice(0, 5)) - timeToMin(a.from.slice(0, 5))),
+        (s, a) => s + Math.max(0, endMinutes(a.to) - timeToMin(a.from.slice(0, 5))),
         0
       );
       const status = resolveStatus({ record, activeMin, zepMin });
@@ -253,10 +270,11 @@ export async function getDayDetail(date: string): Promise<DayDetail> {
   let record = (await loadDay(date)) ?? emptyRecord(date);
   record = await reconcileStaleAnalyzing(record);
 
-  const [dumpResult, zepByDay, screenshots] = await Promise.allSettled([
+  const [dumpResult, zepByDay, screenshots, calendar] = await Promise.allSettled([
     getDayDump(date),
     getAttendancesByDay(date, date),
-    listThumbStrip(date, 15),
+    listThumbStrip(date, 1), // one per minute — thumbnails load lazily via /shot
+    getDayCalendar(date),
   ]);
 
   let timeline: TimelineBucket[] = [];
@@ -304,6 +322,8 @@ export async function getDayDetail(date: string): Promise<DayDetail> {
     activeMinutes,
     zepEntries,
     screenshots: screenshots.status === "fulfilled" ? screenshots.value : [],
+    calendar:
+      calendar.status === "fulfilled" ? calendar.value : { status: "error", events: [] },
     isToday: date === today,
   };
 }
@@ -331,7 +351,8 @@ export async function saveEntries(
       (a, b) => timeToMin(a.from) - timeToMin(b.from)
     );
     if (nonWork) r.nonWork = nonWork;
-    if (r.status === "missing" && suggestions.length > 0) r.status = "analyzed";
+    if ((r.status === "missing" || r.status === "empty") && suggestions.length > 0)
+      r.status = "analyzed";
   });
 }
 
@@ -370,7 +391,7 @@ export async function submitDay(
     const submitList: SubmitEntry[] = entries.map((s) => ({
       date,
       from: toZepTime(s.from),
-      to: s.to === "23:59" ? "23:59:00" : toZepTime(s.to),
+      to: s.to === "23:59" ? ZEP_END_OF_DAY : toZepTime(s.to),
       project: s.project,
       task: s.task,
       subtask: s.subtask,

@@ -42,33 +42,61 @@ click a day opens it.
 
 Pick a model tier per analysis (Fast / Balanced / Best selector, top-right):
 
-| Tier | Model | Backend | Speed |
-|------|-------|---------|-------|
-| **Fast** (default) | Haiku 4.5 | Anthropic **SDK** over your Claude subscription OAuth token | ~a few seconds |
-| **Balanced** | Sonnet | SDK if you set an API key, otherwise Claude CLI | fast w/ key, ~2 min via CLI |
-| **Best** | Opus | SDK if you set an API key, otherwise Claude CLI | ~2 min via CLI |
+| Tier | Model | Typical time per day |
+|------|-------|----------------------|
+| **Fast** | Haiku 4.5 | a few seconds |
+| **Balanced** | Sonnet 5 | ~10–20 s |
+| **Best** (default) | Opus 5.5 | ~20–40 s |
 
-The Fast path uses the official `@anthropic-ai/sdk` with the OAuth token that
-Claude Code already stores in `~/.claude/.credentials.json` (scope
-`user:inference`) — **no API key needed**, and it's ~40× faster than shelling
-out to `claude -p` (seconds vs. minutes). The subscription only permits Haiku
-over the direct API, so Sonnet/Opus fall through to the CLI unless you provide
-a real `ANTHROPIC_API_KEY` (which unlocks fast Sonnet/Opus via the SDK with no
-limits). Order of precedence: real API key → subscription OAuth (Fast only) →
-Claude CLI.
+All tiers use the official `@anthropic-ai/sdk` with the OAuth token Claude
+Code already stores in `~/.claude/.credentials.json` — **no API key needed**,
+and far faster than shelling out to `claude -p` (seconds vs. minutes). The
+subscription accepts Sonnet/Opus over the direct API only when the Claude Code
+identity is the first system block (otherwise 429), which the backend adds.
+Expired tokens are refreshed automatically by running one tiny `claude -p`
+call. Order of precedence: real `ANTHROPIC_API_KEY` → subscription OAuth →
+Claude CLI (also used as a fallback if an SDK call fails).
 
-Bulk workflow: analyze a whole month on **Fast** (seconds each), review with
-the checkboxes + the "ask to change" box, and re-run individual tricky days on
-**Best**.
+Speed-ups: the rules + the month's project list form a prompt-cached system
+prefix shared by every day of that month, and the queue analyzes up to 3 days
+in parallel.
 
 Env knobs (`.env`): `TIMESHEET_LLM` (`api`|`cli` to force a backend),
-`TIMESHEET_MODEL` (override the API-key model), `TIMESHEET_RANGE_START`,
+`TIMESHEET_EFFORT` (`low`…`max`, default `medium`), `TIMESHEET_CONCURRENCY`
+(parallel analyses, default 3), `TIMESHEET_RANGE_START`,
 `MANICTIME_MCP_PATH`, `MANICTIME_SCREENSHOTS_PATH`.
+
+
+### Outlook calendar (optional)
+
+The day view can show a **Calendar** row with your Outlook meetings, and the
+analyzer uses them to book meetings held away from the computer. It reads your
+calendar through Microsoft Graph with delegated `Calendars.Read`. There is no
+client secret; you sign in once in the browser and the token is cached in
+`.cache/msal-token-cache.json`.
+
+One-time setup in the Entra admin center (portal.azure.com → *Microsoft Entra
+ID* → *App registrations* → *New registration*):
+
+1. Name it e.g. "Timesheet calendar". Under *Supported account types*, choose
+   *Accounts in this organizational directory only*.
+2. Under *Redirect URI*, choose platform **Public client/native (mobile &
+   desktop)** and enter `http://localhost`.
+3. Under *API permissions*, add *Microsoft Graph* → *Delegated* →
+   `Calendars.Read`. If your tenant blocks user consent, an admin must click
+   *Grant admin consent*.
+4. Copy the *Application (client) ID* and *Directory (tenant) ID* into `.env`
+   as `MS_GRAPH_CLIENT_ID` / `MS_GRAPH_TENANT_ID`, then restart the server.
+5. Open any day and click **Connect Outlook calendar**.
 
 ### Data & caches
 
 - `data/days/YYYY-MM-DD.json` — per-day suggestions/context/status
   (human-readable, git-ignored).
+- `data/recurring-rules.md` — user-approved recurring facts proposed from the
+  context box; they are applied to matching future days. Nothing is added
+  without pressing **Add to recurring rules**.
+- `.cache/msal-token-cache.json` — Outlook/Graph sign-in (delete to sign out).
 - `.cache/zep-projects-YYYY-MM.json` — ZEP project/task list per month (24h TTL).
 - ManicTime is queried through the local MCP server
   (`C:\Program Files\ManicTime\ManicTimeMcp.exe`), spawned on demand.

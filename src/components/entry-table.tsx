@@ -1,11 +1,11 @@
 import * as React from "react";
-import { AtSign, Check, Plus, Split, Trash2, ArrowDownToLine, Lock } from "lucide-react";
+import { AtSign, Check, Plus, Send, Split, Trash2, ArrowDownToLine, Lock } from "lucide-react";
 import { Combobox } from "@/components/combobox";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { EntryThumbs, shotsInRange } from "@/components/screenshots";
-import { cn, timeToMin, minToTime, snap15, fmtDuration } from "@/lib/utils";
+import { TimeField } from "@/components/time-field";
+import { EntryThumbs, shotsInRange, type ShotRange } from "@/components/screenshots";
+import { cn, timeToMin, minToTime, snap15, fmtDuration, endMinOf, fmtTime, END_OF_DAY } from "@/lib/utils";
 import { projectColor } from "@/lib/status";
 import type {
   NonWorkSegment,
@@ -22,7 +22,7 @@ interface EntryTableProps {
   options: ProjectTaskOption[];
   screenshots: ScreenshotThumb[];
   thumbs: Map<string, string>;
-  onOpenShot: (s: ScreenshotThumb) => void;
+  onOpenShot: (s: ScreenshotThumb, range: ShotRange) => void;
   selectedId?: string | null;
   onSelect: (id: string | null) => void;
   onChange: (entries: SuggestedEntry[]) => void;
@@ -31,10 +31,11 @@ interface EntryTableProps {
   refedGaps: Set<string>;
   onToggleEntryRef: (e: SuggestedEntry) => void;
   onToggleGapRef: (from: string, to: string) => void;
+  /** Opens the submit dialog — shown next to the totals at the end of the table. */
+  onSubmit?: () => void;
 }
 
 const COLS = 9;
-const endMinOf = (t: string) => (t === "23:59" ? 24 * 60 - 1 : timeToMin(t));
 
 function confVariant(c: number): "ok" | "warn" | "bad" {
   if (c >= 75) return "ok";
@@ -88,6 +89,7 @@ export function EntryTable({
   refedGaps,
   onToggleEntryRef,
   onToggleGapRef,
+  onSubmit,
 }: EntryTableProps) {
   // Which row's task picker to auto-open (after its project is chosen).
   const [openTask, setOpenTask] = React.useState<{ id: string; token: number } | null>(null);
@@ -182,9 +184,22 @@ export function EntryTable({
   const mergeDown = (id: string) => {
     const sorted = [...entries].sort((a, b) => timeToMin(a.from) - timeToMin(b.from));
     const idx = sorted.findIndex((e) => e.id === id);
-    const next = sorted[idx + 1];
-    if (idx === -1 || !next) return;
+    if (idx === -1) return;
     const cur = sorted[idx];
+    const curEnd = endMinOf(cur.to);
+    // A gap directly after the row is absorbed first (extend `to` up to the
+    // next suggestion or ZEP row); merging the next entry takes a second click.
+    const nextStarts = [
+      ...sorted.slice(idx + 1).map((e) => timeToMin(e.from)),
+      ...zepEntries.map((z) => timeToMin(z.from)),
+    ].filter((m) => m >= curEnd);
+    const nextStart = nextStarts.length ? Math.min(...nextStarts) : null;
+    if (nextStart !== null && nextStart > curEnd) {
+      update(cur.id, { to: minToTime(nextStart) });
+      return;
+    }
+    const next = sorted[idx + 1];
+    if (!next) return;
     const merged: SuggestedEntry = {
       ...cur,
       to: next.to,
@@ -201,7 +216,7 @@ export function EntryTable({
     const sorted = [...entries].sort((a, b) => timeToMin(a.from) - timeToMin(b.from));
     const last = sorted[sorted.length - 1];
     const from = last ? last.to : "08:00";
-    const fromMin = endMinOf(from) === 24 * 60 - 1 ? 23 * 60 : timeToMin(from);
+    const fromMin = endMinOf(from) === 24 * 60 ? 23 * 60 : timeToMin(from);
     const entry: SuggestedEntry = {
       id: `new${Date.now().toString(36)}${addCounter++}`,
       from: minToTime(fromMin),
@@ -219,16 +234,20 @@ export function EntryTable({
   const setTime = (id: string, field: "from" | "to", value: string) => {
     if (!/^\d{2}:\d{2}$/.test(value)) return;
     const snapped =
-      value === "23:59"
-        ? "23:59"
+      value === END_OF_DAY
+        ? END_OF_DAY
         : minToTime(Math.max(0, Math.min(24 * 60 - 15, snap15(timeToMin(value), "nearest"))));
     update(id, { [field]: snapped } as Partial<SuggestedEntry>);
   };
 
   const stepTime = (id: string, field: "from" | "to", cur: string, dir: 1 | -1) => {
-    const base = cur === "23:59" ? 24 * 60 - 15 : snap15(timeToMin(cur), "nearest");
-    const next = Math.max(0, Math.min(24 * 60 - 15, base + dir * 15));
-    update(id, { [field]: minToTime(next) } as Partial<SuggestedEntry>);
+    // Only an end time may reach 24:00 (stored as the end-of-day sentinel).
+    const max = field === "to" ? 24 * 60 : 24 * 60 - 15;
+    const base = cur === END_OF_DAY ? 24 * 60 : snap15(timeToMin(cur), "nearest");
+    const next = Math.max(0, Math.min(max, base + dir * 15));
+    update(id, {
+      [field]: next === 24 * 60 ? END_OF_DAY : minToTime(next),
+    } as Partial<SuggestedEntry>);
   };
 
   const effectiveBillable = (e: SuggestedEntry): boolean =>
@@ -394,9 +413,10 @@ export function EntryTable({
                         onChange={(ev) => {
                           ev.stopPropagation();
                           update(e.id, { approved: ev.target.checked }, { noAutoLock: true });
+                          onSelect(e.id); // so "n" (approve next) continues from this row
                         }}
                         onClick={(ev) => ev.stopPropagation()}
-                        title="Approve / verify this row (green). Approved rows are locked from AI edits unless referenced, and survive re-analysis."
+                        title="Approve / verify this row (green). Approved rows are locked from AI edits unless referenced, and survive re-analysis. Press n to approve the next row."
                         className="size-4 cursor-pointer accent-[var(--ok)]"
                       />
                       <button
@@ -425,29 +445,20 @@ export function EntryTable({
                       />
                       <div>
                         <div className="flex items-center gap-1">
-                          <Input
-                            type="time"
-                            step={900}
+                          <TimeField
                             value={e.from}
-                            onChange={(ev) => setTime(e.id, "from", ev.target.value)}
-                            onKeyDown={(ev) => {
-                              if (ev.key === "ArrowUp") { ev.preventDefault(); stepTime(e.id, "from", e.from, 1); }
-                              else if (ev.key === "ArrowDown") { ev.preventDefault(); stepTime(e.id, "from", e.from, -1); }
-                            }}
-                            title="↑/↓ adjust by 15 min"
-                            className={cn("h-7 w-[4.6rem] px-1 text-xs tabular-nums", isOverlap && "border-bad text-bad")}
+                            onCommit={(v) => setTime(e.id, "from", v)}
+                            onStep={(dir) => stepTime(e.id, "from", e.from, dir)}
+                            invalid={isOverlap}
+                            className="w-[4.6rem]"
                           />
-                          <Input
-                            type="time"
-                            step={900}
+                          <TimeField
                             value={e.to}
-                            onChange={(ev) => setTime(e.id, "to", ev.target.value)}
-                            onKeyDown={(ev) => {
-                              if (ev.key === "ArrowUp") { ev.preventDefault(); stepTime(e.id, "to", e.to, 1); }
-                              else if (ev.key === "ArrowDown") { ev.preventDefault(); stepTime(e.id, "to", e.to, -1); }
-                            }}
-                            title="↑/↓ adjust by 15 min"
-                            className={cn("h-7 w-[4.6rem] px-1 text-xs tabular-nums", isOverlap && "border-bad text-bad")}
+                            isEnd
+                            onCommit={(v) => setTime(e.id, "to", v)}
+                            onStep={(dir) => stepTime(e.id, "to", e.to, dir)}
+                            invalid={isOverlap}
+                            className="w-[4.6rem]"
                           />
                         </div>
                         <div className="pt-0.5 text-[10px] text-muted-foreground/60">
@@ -509,7 +520,7 @@ export function EntryTable({
                     )}
                   </td>
                   <td className="pr-2">
-                    <EntryThumbs shots={entryShots} thumbs={thumbs} onOpen={onOpenShot} />
+                    <EntryThumbs shots={entryShots} thumbs={thumbs} onOpen={(s) => onOpenShot(s, { from: e.from, to: e.to })} />
                   </td>
                   <td className="text-center">
                     <input
@@ -547,7 +558,7 @@ export function EntryTable({
                         <Split size={13} />
                       </button>
                       <button
-                        title="Merge with next entry"
+                        title="Merge down — fills a following gap first, then merges the next entry"
                         onClick={(ev) => {
                           ev.stopPropagation();
                           mergeDown(e.id);
@@ -578,7 +589,7 @@ export function EntryTable({
 
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
         <Button variant="outline" size="sm" onClick={addEntry} data-add-entry>
-          <Plus size={13} /> Add entry <kbd className="ml-1">n</kbd>
+          <Plus size={13} /> Add entry <kbd className="ml-1">e</kbd>
         </Button>
         <div className="flex items-center gap-4 text-sm text-muted-foreground">
           <span className="inline-flex items-center gap-1">
@@ -589,6 +600,17 @@ export function EntryTable({
             Total to book:{" "}
             <span className="font-semibold text-foreground">{fmtDuration(total)}</span>
           </span>
+          {onSubmit && (
+            <Button
+              size="sm"
+              className="bg-ok text-background hover:bg-ok/85"
+              disabled={entries.length === 0}
+              onClick={onSubmit}
+              title="Review & submit (s)"
+            >
+              <Send size={13} /> Submit…
+            </Button>
+          )}
         </div>
       </div>
 
@@ -601,7 +623,7 @@ export function EntryTable({
               className="inline-flex items-center gap-1 rounded-full bg-secondary/60 px-2 py-0.5"
               title={s.note}
             >
-              {s.from}–{s.to} · {s.kind}
+              {s.from}–{fmtTime(s.to)} · {s.kind}
               {s.note ? ` — ${s.note}` : ""}
               <button
                 title="Remove segment"
@@ -628,7 +650,7 @@ function ZepRow({
   z: ZepEntryView;
   screenshots: ScreenshotThumb[];
   thumbs: Map<string, string>;
-  onOpenShot: (s: ScreenshotThumb) => void;
+  onOpenShot: (s: ScreenshotThumb, range: ShotRange) => void;
 }) {
   return (
     <tr className="align-top text-muted-foreground [&>td]:border-b [&>td]:border-border/60 [&>td]:py-2 bg-ok/[0.06]">
@@ -642,7 +664,7 @@ function ZepRow({
           <span className="h-7 w-1.5 shrink-0 rounded-full" style={{ background: projectColor(z.project) }} />
           <div>
             <div className="text-xs tabular-nums text-foreground/80">
-              {z.from}–{z.to}
+              {z.from}–{fmtTime(z.to)}
             </div>
             <div className="pt-0.5 text-[10px] text-ok/80">in ZEP</div>
           </div>
@@ -652,7 +674,11 @@ function ZepRow({
       <td className="pr-2">{z.task}</td>
       <td className="pr-2 italic">{z.note}</td>
       <td className="pr-2">
-        <EntryThumbs shots={shotsInRange(screenshots, z.from, z.to)} thumbs={thumbs} onOpen={onOpenShot} />
+        <EntryThumbs
+          shots={shotsInRange(screenshots, z.from, z.to)}
+          thumbs={thumbs}
+          onOpen={(s) => onOpenShot(s, { from: z.from, to: z.to })}
+        />
       </td>
       <td className="text-center">{z.billable ? <Check size={13} className="mx-auto text-ok" /> : "—"}</td>
       <td className="text-center">

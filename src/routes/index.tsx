@@ -51,7 +51,7 @@ function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.month]);
 
-  const queueActive = !!data.queue.running || data.queue.pending.length > 0;
+  const queueActive = data.queue.running.length > 0 || data.queue.pending.length > 0;
   React.useEffect(() => {
     if (!queueActive) return;
     const t = setInterval(() => router.invalidate(), 2500);
@@ -115,6 +115,11 @@ function Dashboard() {
   });
 
   const monthLabel = MONTH_FMT.format(parseISO(data.monthStart));
+  // Shared scale for the per-day bars: the month's largest active OR ZEP total.
+  const maxMinutes = Math.max(
+    60,
+    ...data.days.map((d) => Math.max(d.activeMinutes, d.zepMinutes))
+  );
   const padStart = data.days[0]?.weekday ?? 0;
 
   return (
@@ -160,7 +165,9 @@ function Dashboard() {
           {queueActive && (
             <Badge variant="info" className="ml-2">
               <Loader2 size={11} className="animate-spin" />
-              {data.queue.running ? `analyzing ${data.queue.running.slice(5)}` : "queued"}
+              {data.queue.running.length > 0
+                ? `analyzing ${data.queue.running.map((d) => d.slice(5)).join(", ")}`
+                : "queued"}
               {data.queue.pending.length > 0 && ` +${data.queue.pending.length}`}
             </Badge>
           )}
@@ -209,6 +216,7 @@ function Dashboard() {
             key={d.date}
             day={d}
             selected={d.date === selected}
+            maxMinutes={maxMinutes}
             onOpen={() => openDay(d.date)}
             onSelect={() => setSelected(d.date)}
           />
@@ -258,11 +266,13 @@ function Stat({
 function DayCell({
   day,
   selected,
+  maxMinutes,
   onOpen,
   onSelect,
 }: {
   day: DayOverview;
   selected: boolean;
+  maxMinutes: number;
   onOpen: () => void;
   onSelect: () => void;
 }) {
@@ -277,7 +287,7 @@ function DayCell({
       onMouseEnter={onSelect}
       title={`${day.date} — ${meta.label}\nActive ${fmtDuration(day.activeMinutes)} · ZEP ${fmtDuration(day.zepMinutes)}`}
       className={cn(
-        "flex h-20 cursor-pointer flex-col rounded-md p-2 text-left transition-all",
+        "flex h-24 cursor-pointer flex-col rounded-md p-2 text-left transition-all",
         meta.cellClass,
         selected && "outline outline-2 outline-ring"
       )}
@@ -294,6 +304,24 @@ function DayCell({
           <div className="text-ok/80">{fmtDuration(day.zepMinutes)} in ZEP</div>
         )}
       </div>
+      {(day.activeMinutes > 0 || day.zepMinutes > 0) && (
+        <div className="mt-1 flex flex-col gap-0.5" aria-hidden>
+          <Bar minutes={day.activeMinutes} max={maxMinutes} className="bg-muted-foreground/60" />
+          <Bar minutes={day.zepMinutes} max={maxMinutes} className="bg-ok" />
+        </div>
+      )}
     </button>
+  );
+}
+
+/** Thin horizontal bar, length proportional to minutes / max (month scale). */
+function Bar({ minutes, max, className }: { minutes: number; max: number; className: string }) {
+  return (
+    <div className="h-1 w-full overflow-hidden rounded-full bg-white/5">
+      <div
+        className={cn("h-full rounded-full", className)}
+        style={{ width: `${Math.min(100, (minutes / max) * 100)}%` }}
+      />
+    </div>
   );
 }

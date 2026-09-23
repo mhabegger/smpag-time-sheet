@@ -9,6 +9,7 @@ import { addDays, format, parseISO } from "date-fns";
 import {
   AlertTriangle,
   ArrowLeft,
+  BookmarkPlus,
   ChevronLeft,
   ChevronRight,
   Check,
@@ -22,22 +23,27 @@ import {
   fetchDay,
   fetchOptions,
   queueAnalysis,
+  recheckManicTime,
+  addRecurringMemory,
   saveDayContext,
   saveDayEntries,
   setDayIgnored,
 } from "@/server/fns";
 import { useHotkeys } from "@/lib/hotkeys";
-import { fmtDuration, timeToMin, cn } from "@/lib/utils";
+import { findRecurringRuleCandidate } from "@/lib/recurring";
+import { fmtDuration, timeToMin, cn, endMinOf, fmtTime } from "@/lib/utils";
 import { STATUS_META } from "@/lib/status";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/input";
 import { DayTimeline } from "@/components/day-timeline";
+import { CalendarConnect } from "@/components/calendar-connect";
 import { EntryTable } from "@/components/entry-table";
 import { ChatEdit } from "@/components/chat-edit";
 import {
   useDayThumbnails,
   ScreenshotViewer,
+  type ShotRange,
 } from "@/components/screenshots";
 import { SubmitDialog } from "@/components/submit-dialog";
 import { HelpDialog } from "@/components/help-dialog";
@@ -77,6 +83,10 @@ function DayView() {
   const [entries, setEntries] = React.useState<SuggestedEntry[]>(record.suggestions);
   const [nonWork, setNonWork] = React.useState<NonWorkSegment[]>(record.nonWork);
   const [context, setContext] = React.useState(record.context ?? "");
+  const [dismissedRecurringRule, setDismissedRecurringRule] = React.useState<string | null>(null);
+  const [savedRecurringRule, setSavedRecurringRule] = React.useState<string | null>(null);
+  const [recurringMemoryMessage, setRecurringMemoryMessage] = React.useState<string | null>(null);
+  const [rememberingRule, setRememberingRule] = React.useState(false);
   const lastResetKey = React.useRef(resetKey);
   if (lastResetKey.current !== resetKey) {
     lastResetKey.current = resetKey;
@@ -84,11 +94,29 @@ function DayView() {
     setNonWork(record.nonWork);
     setContext(record.context ?? "");
   }
+  React.useEffect(() => {
+    setDismissedRecurringRule(null);
+    setSavedRecurringRule(null);
+    setRecurringMemoryMessage(null);
+  }, [date]);
 
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [submitOpen, setSubmitOpen] = React.useState(false);
   const [helpOpen, setHelpOpen] = React.useState(false);
   const [openShot, setOpenShot] = React.useState<ScreenshotThumb | null>(null);
+
+  // Height of the sticky header, so the pinned chat box sits right below it
+  // (the header wraps to two rows on narrow windows).
+  const stickyHeaderRef = React.useRef<HTMLDivElement>(null);
+  const [stickyHeaderH, setStickyHeaderH] = React.useState(88);
+  React.useLayoutEffect(() => {
+    const el = stickyHeaderRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setStickyHeaderH(el.offsetHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const [shotRange, setShotRange] = React.useState<ShotRange | null>(null);
   const [refs, setRefs] = React.useState<ChatRef[]>([]);
   const contextRef = React.useRef<HTMLTextAreaElement>(null);
 
@@ -112,7 +140,7 @@ function DayView() {
             {
               kind: "entry",
               id: e.id,
-              label: `${e.from}–${e.to} ${e.project.replace(/^26__/, "")}`,
+              label: `${e.from}–${fmtTime(e.to)} ${e.project.replace(/^26__/, "")}`,
             },
           ]
     );
@@ -203,9 +231,56 @@ function DayView() {
     navigate({ to: "/day/$date", params: { date: next } });
   };
 
+  // Ctrl/Cmd+← / → = previous / next day. Skipped while typing in a text
+  // field (word-jump there) and while a dialog (e.g. screenshots) is open.
+  const gotoDayRef = React.useRef(gotoDay);
+  gotoDayRef.current = gotoDay;
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (document.querySelector("[role='dialog']")) return;
+      const el = e.target as HTMLElement | null;
+      const typing =
+        el?.isContentEditable ||
+        el?.tagName === "TEXTAREA" ||
+        (el?.tagName === "INPUT" &&
+          !["checkbox", "radio", "button"].includes((el as HTMLInputElement).type));
+      if (typing) return;
+      e.preventDefault();
+      gotoDayRef.current(e.key === "ArrowLeft" ? -1 : 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const saveContextNow = async () => {
     if ((record.context ?? "") !== context)
       await saveDayContext({ data: { date, context } });
+  };
+
+  const recurringCandidate = React.useMemo(
+    () => findRecurringRuleCandidate(context),
+    [context]
+  );
+  const showRecurringSuggestion =
+    recurringCandidate &&
+    recurringCandidate !== dismissedRecurringRule &&
+    recurringCandidate !== savedRecurringRule;
+  const rememberRecurringRule = async () => {
+    if (!recurringCandidate || rememberingRule) return;
+    setRememberingRule(true);
+    try {
+      const result = await addRecurringMemory({ data: { rule: recurringCandidate } });
+      setSavedRecurringRule(recurringCandidate);
+      setRecurringMemoryMessage(
+        result.added
+          ? "Added to local recurring rules. It will be considered on matching future days."
+          : "This rule is already stored in local recurring rules."
+      );
+    } finally {
+      setRememberingRule(false);
+    }
   };
 
   const [starting, setStarting] = React.useState(false);
@@ -221,9 +296,39 @@ function DayView() {
     }
   };
 
+  const [rechecking, setRechecking] = React.useState(false);
+  const [recheckedAt, setRecheckedAt] = React.useState<string | null>(null);
+  React.useEffect(() => setRecheckedAt(null), [date]);
+  const recheck = async () => {
+    if (rechecking) return;
+    setRechecking(true);
+    try {
+      await recheckManicTime({ data: { date } });
+      await router.invalidate({ sync: true });
+      setRecheckedAt(format(new Date(), "HH:mm:ss"));
+    } finally {
+      setRechecking(false);
+    }
+  };
+
   const toggleIgnore = async () => {
     await setDayIgnored({ data: { date, ignored: record.status !== "ignored" } });
     router.invalidate();
+  };
+
+  // Approve the first unapproved row at-or-after the selection and select it —
+  // pressing n repeatedly walks down the table validating rows; edit a row
+  // first and n approves that edited row before moving on.
+  const approveNext = () => {
+    const sorted = [...entries].sort((a, b) => timeToMin(a.from) - timeToMin(b.from));
+    const idx = selectedId ? sorted.findIndex((x) => x.id === selectedId) : -1;
+    const target = sorted.slice(Math.max(0, idx)).find((x) => !x.approved);
+    if (!target) return;
+    changeEntries(entries.map((x) => (x.id === target.id ? { ...x, approved: true } : x)));
+    setSelectedId(target.id);
+    document
+      .querySelector(`[data-entry-id="${target.id}"]`)
+      ?.scrollIntoView({ block: "center", behavior: "smooth" });
   };
 
   useHotkeys({
@@ -232,9 +337,10 @@ function DayView() {
     a: () => void analyze(),
     c: () => contextRef.current?.focus(),
     "/": () =>
-      (document.querySelector("[data-chat-edit] input") as HTMLInputElement | null)?.focus(),
+      (document.querySelector("[data-chat-edit] textarea") as HTMLTextAreaElement | null)?.focus(),
     s: () => entries.length > 0 && setSubmitOpen(true),
-    n: () => (document.querySelector("[data-add-entry]") as HTMLButtonElement | null)?.click(),
+    n: () => approveNext(),
+    e: () => (document.querySelector("[data-add-entry]") as HTMLButtonElement | null)?.click(),
     x: () => void toggleIgnore(),
     g: () => navigate({ to: "/", search: { month: date.slice(0, 7) } }),
     "shift+?": () => setHelpOpen(true),
@@ -243,7 +349,7 @@ function DayView() {
   const meta = STATUS_META[record.status];
   const weekday = format(parseISO(date), "EEEE");
   const zepMin = detail.zepEntries.reduce(
-    (s, z) => s + Math.max(0, timeToMin(z.to) - timeToMin(z.from)),
+    (s, z) => s + Math.max(0, endMinOf(z.to) - timeToMin(z.from)),
     0
   );
 
@@ -263,8 +369,12 @@ function DayView() {
           allReviewed && "ring-1 ring-inset ring-ok/20"
         )}
       >
-      {/* header */}
-      <header className="mb-5 flex flex-wrap items-center gap-3">
+      {/* header + meta strip stay pinned to the top while scrolling */}
+      <div
+        ref={stickyHeaderRef}
+        className="sticky top-0 z-40 -mx-6 mb-4 border-b border-border/60 bg-background/95 px-6 pb-2 pt-3 backdrop-blur"
+      >
+      <header className="mb-2 flex flex-wrap items-center gap-3">
         <Link
           to="/"
           search={{ month: date.slice(0, 7) }}
@@ -273,13 +383,13 @@ function DayView() {
           <ArrowLeft size={14} /> Dashboard
         </Link>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" onClick={() => gotoDay(-1)} title="Previous day ([">
+          <Button variant="ghost" size="icon" onClick={() => gotoDay(-1)} title="Previous day ([ or Ctrl+←)">
             <ChevronLeft size={16} />
           </Button>
           <h1 className="min-w-56 text-center text-lg font-semibold tabular-nums">
             {weekday}, {date}
           </h1>
-          <Button variant="ghost" size="icon" onClick={() => gotoDay(1)} title="Next day ]">
+          <Button variant="ghost" size="icon" onClick={() => gotoDay(1)} title="Next day (] or Ctrl+→)">
             <ChevronRight size={16} />
           </Button>
         </div>
@@ -362,7 +472,7 @@ function DayView() {
       </header>
 
       {/* meta strip */}
-      <div className="mb-4 flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
+      <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
         <span>
           Active:{" "}
           <span className="font-medium text-foreground">{fmtDuration(detail.activeMinutes)}</span>
@@ -381,6 +491,7 @@ function DayView() {
             {record.analysis.partialUntil && ` · covers until ${record.analysis.partialUntil}`}
           </span>
         )}
+      </div>
       </div>
 
       {record.error && (
@@ -426,28 +537,97 @@ function DayView() {
             if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur();
           }}
         />
+        {showRecurringSuggestion && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-primary/35 bg-primary/10 px-3 py-2 text-sm">
+            <BookmarkPlus size={15} className="text-primary" />
+            <span className="text-muted-foreground">
+              This sounds recurring: <span className="text-foreground">“{recurringCandidate}”</span>
+            </span>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={rememberingRule}
+              onClick={() => void rememberRecurringRule()}
+            >
+              {rememberingRule ? "Adding…" : "Add to recurring rules"}
+            </Button>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground underline hover:text-foreground"
+              onClick={() => setDismissedRecurringRule(recurringCandidate)}
+            >
+              Not now
+            </button>
+          </div>
+        )}
+        {savedRecurringRule === recurringCandidate && (
+          <p className="mt-2 text-xs text-ok">
+            {recurringMemoryMessage}
+          </p>
+        )}
       </section>
 
       {/* timeline */}
-      <section className="mb-5">
-        <DayTimeline
-          timeline={detail.timeline}
-          entries={entries}
-          nonWork={nonWork}
-          zepEntries={detail.zepEntries}
-          selectedId={selectedId}
-          onSelectEntry={(id) => {
-            setSelectedId(id);
-            document
-              .querySelector(`[data-entry-id="${id}"]`)
-              ?.scrollIntoView({ block: "center", behavior: "smooth" });
-          }}
-        />
-      </section>
+      {detail.timeline.length === 0 ? (
+        <section className="mb-5">
+          <div className="flex flex-wrap items-center gap-3 rounded-md border border-dashed border-border bg-card/60 p-4 text-sm text-muted-foreground">
+            <span>No ManicTime activity recorded for this day.</span>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={rechecking}
+              onClick={() => void recheck()}
+              title="Re-query ManicTime for this day (bypasses the cached result)"
+            >
+              <RefreshCw size={13} className={cn(rechecking && "animate-spin")} />
+              {rechecking ? "Checking ManicTime…" : "Check ManicTime again"}
+            </Button>
+            {recheckedAt && !rechecking && (
+              <span className="text-xs text-warn">
+                Re-checked at {recheckedAt} — ManicTime still reports no activity for this day.
+              </span>
+            )}
+          </div>
+          {/* Meetings away from the computer still show up here. */}
+          {detail.calendar.events.length > 0 && (
+            <div className="mt-3">
+              <DayTimeline
+                timeline={detail.timeline}
+                entries={entries}
+                nonWork={nonWork}
+                zepEntries={detail.zepEntries}
+                calendar={detail.calendar.events}
+              />
+            </div>
+          )}
+          <CalendarConnect calendar={detail.calendar} onConnected={() => void router.invalidate()} />
+        </section>
+      ) : (
+        <section className="mb-5">
+          <DayTimeline
+            calendar={detail.calendar.status === "ok" ? detail.calendar.events : undefined}
+            timeline={detail.timeline}
+            entries={entries}
+            nonWork={nonWork}
+            zepEntries={detail.zepEntries}
+            selectedId={selectedId}
+            onSelectEntry={(id) => {
+              setSelectedId(id);
+              document
+                .querySelector(`[data-entry-id="${id}"]`)
+                ?.scrollIntoView({ block: "center", behavior: "smooth" });
+            }}
+          />
+          <CalendarConnect calendar={detail.calendar} onConnected={() => void router.invalidate()} />
+        </section>
+      )}
 
       {/* chat-to-edit */}
       {(entries.length > 0 || record.analysis) && (
-        <section className="mb-5">
+        <section
+          className={cn("mb-5", refs.length > 0 && "sticky z-30")}
+          style={refs.length > 0 ? { top: stickyHeaderH + 8 } : undefined}
+        >
           <ChatEdit
             date={date}
             entries={entries}
@@ -501,13 +681,17 @@ function DayView() {
           </div>
         ) : (
           <EntryTable
+            onSubmit={() => setSubmitOpen(true)}
             entries={entries}
             zepEntries={detail.zepEntries}
             nonWork={nonWork}
             options={options}
             screenshots={detail.screenshots}
             thumbs={thumbs}
-            onOpenShot={setOpenShot}
+            onOpenShot={(s, range) => {
+              setShotRange(range);
+              setOpenShot(s);
+            }}
             selectedId={selectedId}
             onSelect={setSelectedId}
             onChange={changeEntries}
@@ -539,6 +723,7 @@ function DayView() {
         shots={detail.screenshots}
         thumbs={thumbs}
         current={openShot}
+        range={shotRange}
         onClose={() => setOpenShot(null)}
         onNavigate={setOpenShot}
       />
