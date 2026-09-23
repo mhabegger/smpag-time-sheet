@@ -175,3 +175,10 @@ export const disconnectCalendar = createServerFn({ method: "POST" }).handler(asy
   const { signOutCalendar } = await import("./calendar.js");
   return signOutCalendar();
 });
+
+export const clearQueueErrors = createServerFn({ method: "POST" }).handler(
+  async (): Promise<QueueStatus> => {
+    const { clearRecentErrors } = await import("./queue.js");
+    return clearRecentErrors();
+  }
+);

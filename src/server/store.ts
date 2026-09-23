@@ -3,7 +3,7 @@
  * Human-inspectable, no DB. Writes are atomic (tmp + rename).
  */
 
-import { mkdir, readFile, writeFile, rename, readdir } from "fs/promises";
+import { mkdir, readFile, writeFile, rename, readdir, rm } from "fs/promises";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import type { DayRecord } from "../lib/types.js";
@@ -55,7 +55,30 @@ export async function saveDay(record: DayRecord): Promise<void> {
   // unique tmp name — concurrent saves must not race on the same tmp file
   const tmp = `${target}.${process.pid}.${tmpSeq++}.tmp`;
   await writeFile(tmp, JSON.stringify(record, null, 2), "utf-8");
-  await rename(tmp, target);
+  await renameWithRetry(tmp, target);
+}
+
+/**
+ * Windows refuses to replace a file that another handle has open at that
+ * instant (EPERM/EACCES/EBUSY) — e.g. the dashboard polling loadAllDays()
+ * while the queue saves a day, or an antivirus scan. Such locks last
+ * milliseconds, so retry with a short backoff instead of failing the write.
+ */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const transient = code === "EPERM" || code === "EACCES" || code === "EBUSY";
+      if (!transient || attempt >= 12) {
+        await rm(from, { force: true }).catch(() => {});
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, Math.min(20 * 2 ** attempt, 500)));
+    }
+  }
 }
 
 // Per-date write lock: updateDay is a read-modify-write, so concurrent

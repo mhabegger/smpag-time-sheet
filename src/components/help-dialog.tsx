@@ -10,6 +10,8 @@ const GROUPS: { title: string; keys: [string, string][] }[] = [
       ["a", "Analyze selected day"],
       ["A", "Analyze all missing this month"],
       ["x", "Ignore / un-ignore selected day"],
+      ["Space / Ctrl+click", "Select a day for batch re-analysis"],
+      ["Shift+click", "Select a range of days"],
     ],
   },
   {

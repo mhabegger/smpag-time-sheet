@@ -96,3 +96,9 @@ async function work(): Promise<void> {
     state.workers--;
   }
 }
+
+/** Forget the recent errors (the dashboard's "Dismiss" button). */
+export function clearRecentErrors(): QueueStatus {
+  state.recentErrors = [];
+  return queueStatus();
+}
