@@ -93,9 +93,12 @@ export function loadBlocks(dump: Dump): {
   // "timelineActivities" (pre-2026 MCP) / "activities" (current MCP)
   const ta = dump.timelineActivities ?? dump.activities;
   const gr = dump.groups;
-  if (!ca || !ta || !gr) {
+  // A day with nothing recorded comes back without these tables (or with an
+  // empty combinedActivities) — that's an empty day, not a schema error.
+  if (!ca?.rows?.length) return { blocks: [], firstActive: null, lastActive: null };
+  if (!ta || !gr) {
     throw new Error(
-      "Dump missing combinedActivities/activities/groups tables"
+      "Dump has combinedActivities but is missing activities/groups tables"
     );
   }
 

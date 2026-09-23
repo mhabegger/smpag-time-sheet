@@ -1,6 +1,6 @@
 /**
- * Screenshot access for the web UI: thumbnail strips, full-size images as
- * data URLs (local app — no need for a static file server), and OCR samples.
+ * Screenshot access for the web UI: thumbnail strips, raw JPEG responses for
+ * the /shot route, and OCR samples.
  */
 
 import { readdir, readFile } from "fs/promises";
@@ -62,16 +62,42 @@ export async function listThumbStrip(
   return out;
 }
 
-/** Read an image under the screenshots root and return it as a data URL. */
-export async function readScreenshot(path: string): Promise<string> {
+/** Resolve a screenshot path, refusing anything outside the screenshots root. */
+export function containedPath(path: string): string {
   const abs = normalize(resolve(path));
   // proper containment check: relative path must not escape the root
   const rel = relative(screenshotsRoot(), abs);
   if (rel.startsWith("..") || isAbsolute(rel)) {
     throw new Error("Path outside the screenshots directory");
   }
-  const buf = await readFile(abs);
-  return `data:image/jpeg;base64,${buf.toString("base64")}`;
+  return abs;
+}
+
+/**
+ * Raw JPEG response for the /shot route. Screenshots never change once
+ * written, so the browser may cache them indefinitely — re-opening or
+ * paging back through a day is then instant.
+ */
+export async function screenshotResponse(path: string | null): Promise<Response> {
+  if (!path) return new Response("missing ?p=", { status: 400 });
+  let abs: string;
+  try {
+    abs = containedPath(path);
+  } catch {
+    return new Response("forbidden", { status: 403 });
+  }
+  try {
+    const buf = await readFile(abs);
+    return new Response(new Uint8Array(buf), {
+      headers: {
+        "Content-Type": "image/jpeg",
+        "Content-Length": String(buf.length),
+        "Cache-Control": "private, max-age=31536000, immutable",
+      },
+    });
+  } catch {
+    return new Response("not found", { status: 404 });
+  }
 }
 
 /** OCR one screenshot every `intervalMinutes` across the day. */

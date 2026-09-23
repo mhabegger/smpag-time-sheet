@@ -1,18 +1,18 @@
 /**
  * LLM backend for the analyzer and the chat-to-edit feature.
  *
- * Three backends, resolved per model tier:
- *   1. Anthropic API with a real ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
- *      (any model, structured outputs, fastest + unrestricted).
+ * Backends, in order of preference:
+ *   1. Anthropic API with a real ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN.
  *   2. Anthropic SDK over the local Claude Code subscription OAuth token
- *      (from ~/.claude/.credentials.json). Fast (~seconds) but the
- *      subscription only permits Haiku over the direct API — the larger
- *      models return 429 — so this backend is used for the "fast" tier only.
- *   3. Headless Claude Code CLI (`claude -p`) — reuses the subscription and
- *      can run any model, but carries heavy harness overhead (minutes).
+ *      (~/.claude/.credentials.json). Every tier works here as long as the
+ *      Claude Code identity is the first system block (without it, non-Haiku
+ *      models return 429). Seconds per call instead of minutes.
+ *   3. Headless Claude Code CLI (`claude -p`) — slow harness overhead, used
+ *      only when there is no usable token or the SDK call fails.
  *
- * Resolution: real key ? API : (fast tier & OAuth token ? SDK-OAuth : CLI),
- * with SDK failures falling back to the CLI.
+ * Prompts are split into a stable, cached system prefix (rules + the month's
+ * project list) and a per-day user message, so a batch of days in the same
+ * month re-reads the prefix from the prompt cache.
  */
 
 import { spawn } from "child_process";
@@ -24,26 +24,42 @@ import { type ModelTier, DEFAULT_TIER } from "../lib/models.js";
 
 export { type ModelTier, DEFAULT_TIER };
 
-/** Model id per tier for the direct API (real key or OAuth). */
-const API_MODEL: Record<ModelTier, string> = {
+/** Model id per tier (same ids for the API and the CLI). */
+const MODEL: Record<ModelTier, string> = {
   fast: "claude-haiku-4-5",
   balanced: "claude-sonnet-5",
-  best: "claude-opus-4-8",
-};
-
-/** Explicit model id per tier for the Claude Code CLI (so Balanced is
- *  really Sonnet 5, not whatever the "sonnet" alias resolves to). */
-const CLI_MODEL: Record<ModelTier, string> = {
-  fast: "claude-haiku-4-5",
-  balanced: "claude-sonnet-5",
-  best: "claude-opus-4-8",
+  best: "claude-opus-5-5",
 };
 
 export const TIER_LABEL: Record<ModelTier, string> = {
-  fast: "Fast · Haiku",
+  fast: "Fast · Haiku 4.5",
   balanced: "Balanced · Sonnet 5",
-  best: "Best · Opus",
+  best: "Best · Opus 5.5",
 };
+
+type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** Haiku 4.5 rejects the effort parameter; everything newer accepts it. */
+function supportsEffort(model: string): boolean {
+  return !model.startsWith("claude-haiku");
+}
+
+/** Analysis effort (Opus 5.5 defaults to medium; override via TIMESHEET_EFFORT). */
+function analysisEffort(): Effort {
+  const e = process.env.TIMESHEET_EFFORT;
+  return e === "low" || e === "medium" || e === "high" || e === "xhigh" || e === "max"
+    ? e
+    : "medium";
+}
+
+/** Required first system block for subscription tokens on non-Haiku models. */
+const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+/** A prompt split into a cacheable system prefix and the per-call user part. */
+export interface PromptParts {
+  system: string[];
+  user: string;
+}
 
 /* ------------------------------------------------------------------ */
 /* Schemas                                                            */
@@ -131,38 +147,70 @@ interface OAuthCreds {
   expiresAt: number;
 }
 
-function loadOAuth(): OAuthCreds | null {
+const CREDENTIALS_PATH = resolve(homedir(), ".claude", ".credentials.json");
+
+function readOAuth(): (OAuthCreds & { expired: boolean }) | null {
   if (process.env.TIMESHEET_LLM === "cli") return null;
   try {
-    const raw = readFileSync(
-      resolve(homedir(), ".claude", ".credentials.json"),
-      "utf-8"
-    );
-    const o = JSON.parse(raw)?.claudeAiOauth;
+    const o = JSON.parse(readFileSync(CREDENTIALS_PATH, "utf-8"))?.claudeAiOauth;
     if (!o?.accessToken) return null;
-    if (typeof o.expiresAt === "number" && o.expiresAt < Date.now() + 60_000)
-      return null; // expired / about to expire
-    return { accessToken: o.accessToken, expiresAt: o.expiresAt ?? 0 };
+    const expiresAt = typeof o.expiresAt === "number" ? o.expiresAt : 0;
+    return {
+      accessToken: o.accessToken,
+      expiresAt,
+      expired: expiresAt > 0 && expiresAt < Date.now() + 60_000,
+    };
   } catch {
     return null;
   }
 }
 
-export function resolveBackend(tier: ModelTier): Backend {
-  const forced = process.env.TIMESHEET_LLM; // "api" | "cli" | undefined
-  if (hasRealKey() && forced !== "cli") {
-    return { kind: "api", oauth: false, model: API_MODEL[tier], label: `${API_MODEL[tier]} · API` };
-  }
-  if (forced !== "cli" && tier === "fast" && loadOAuth()) {
-    return { kind: "api", oauth: true, model: "claude-haiku-4-5", label: "Haiku · SDK (subscription)" };
-  }
-  return { kind: "cli", oauth: false, model: CLI_MODEL[tier], label: `${CLI_MODEL[tier]} · Claude CLI` };
+function loadOAuth(): OAuthCreds | null {
+  const o = readOAuth();
+  return o && !o.expired ? o : null;
 }
 
-/** Human-readable description of what each tier will actually use right now. */
+/**
+ * The access token is short-lived; Claude Code refreshes it (and rewrites the
+ * credentials file) whenever it runs. Trigger that with one tiny CLI call
+ * instead of re-implementing the OAuth refresh here. Concurrent callers share
+ * the same in-flight refresh.
+ */
+const gRefresh = globalThis as { __tsOAuthRefresh?: Promise<void> | null };
+async function refreshOAuth(): Promise<OAuthCreds | null> {
+  gRefresh.__tsOAuthRefresh ??= runClaude("Reply with OK.", MODEL.fast, [])
+    .then(() => undefined)
+    .catch(() => undefined)
+    .finally(() => {
+      gRefresh.__tsOAuthRefresh = null;
+    });
+  await gRefresh.__tsOAuthRefresh;
+  return loadOAuth();
+}
+
+async function getOAuth(): Promise<OAuthCreds | null> {
+  const o = readOAuth();
+  if (!o) return null;
+  return o.expired ? refreshOAuth() : o;
+}
+
+export function resolveBackend(tier: ModelTier): Backend {
+  const forced = process.env.TIMESHEET_LLM; // "api" | "cli" | undefined
+  const model = MODEL[tier];
+  if (hasRealKey() && forced !== "cli") {
+    return { kind: "api", oauth: false, model, label: `${model} · API` };
+  }
+  // An expired-but-present token counts: getOAuth() refreshes it on use.
+  if (forced !== "cli" && readOAuth()) {
+    return { kind: "api", oauth: true, model, label: `${model} · SDK (subscription)` };
+  }
+  return { kind: "cli", oauth: false, model, label: `${model} · Claude CLI` };
+}
+
+/** Human-readable description of what the tiers will actually use right now. */
 export function backendSummary(): string {
   if (hasRealKey()) return "Anthropic API (key)";
-  if (loadOAuth()) return "Haiku via SDK (subscription) · larger models via CLI";
+  if (readOAuth()) return "Anthropic SDK (subscription)";
   return "Claude CLI (subscription)";
 }
 
@@ -171,30 +219,63 @@ export function backendSummary(): string {
 /* ------------------------------------------------------------------ */
 
 async function runViaApi<T>(
-  prompt: string,
+  prompt: PromptParts,
   schema: ZodType<T>,
   model: string,
-  oauth: boolean
+  oauth: boolean,
+  effort: Effort
 ): Promise<T> {
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
   const { zodOutputFormat } = await import("@anthropic-ai/sdk/helpers/zod");
 
-  const client = oauth
-    ? new Anthropic({
-        authToken: loadOAuth()!.accessToken,
-        defaultHeaders: { "anthropic-beta": "oauth-2025-04-20" },
-      })
-    : new Anthropic();
+  const systemTexts = oauth ? [CLAUDE_CODE_IDENTITY, ...prompt.system] : prompt.system;
+  const system = systemTexts.map((text, i) => ({
+    type: "text" as const,
+    text,
+    // Cache breakpoint on the last stable block (rules + project list).
+    ...(i === systemTexts.length - 1 ? { cache_control: { type: "ephemeral" as const } } : {}),
+  }));
 
-  const response = await client.messages.parse({
-    model,
-    max_tokens: 16000,
-    messages: [{ role: "user", content: prompt }],
-    output_config: { format: zodOutputFormat(schema as ZodType<object>) },
-  });
+  const call = (accessToken?: string) => {
+    const client = accessToken
+      ? new Anthropic({
+          authToken: accessToken,
+          defaultHeaders: { "anthropic-beta": "oauth-2025-04-20" },
+        })
+      : new Anthropic();
+    return client.messages.parse({
+      model,
+      max_tokens: 16000,
+      system,
+      messages: [{ role: "user", content: prompt.user }],
+      output_config: {
+        format: zodOutputFormat(schema as ZodType<object>),
+        ...(supportsEffort(model) ? { effort } : {}),
+      },
+    });
+  };
+
+  let response;
+  if (oauth) {
+    const creds = await getOAuth();
+    if (!creds) throw new Error("No usable Claude subscription token");
+    try {
+      response = await call(creds.accessToken);
+    } catch (err) {
+      // Token revoked/rotated underneath us → refresh once and retry.
+      if ((err as { status?: number }).status !== 401) throw err;
+      const fresh = await refreshOAuth();
+      if (!fresh) throw err;
+      response = await call(fresh.accessToken);
+    }
+  } else {
+    response = await call();
+  }
 
   if (response.stop_reason === "refusal")
     throw new Error("The model declined this request (refusal).");
+  if (response.stop_reason === "max_tokens")
+    throw new Error("Model output was cut off (max_tokens) — try again.");
   const parsed = response.parsed_output;
   if (!parsed) throw new Error("Model returned no parseable structured output");
   return schema.parse(parsed);
@@ -214,12 +295,19 @@ function extractJson(text: string): unknown {
   return JSON.parse(t.slice(start, end + 1));
 }
 
-/** Convert a Zod schema to a JSON-Schema string for the CLI's --json-schema. */
+/**
+ * Convert a Zod schema to the portable JSON-Schema dialect accepted by the
+ * Claude CLI.  Zod's default 2020-12 output includes a `$schema` declaration,
+ * but current Claude Code builds validate with a registry that does not load
+ * that draft and reject it before the prompt is sent.  The CLI accepts the
+ * schema shape itself, so omit the dialect declaration.
+ */
 function toJsonSchemaArg<T>(schema: ZodType<T>): string | null {
   try {
     const js = (z as unknown as {
       toJSONSchema: (s: unknown, o?: unknown) => unknown;
-    }).toJSONSchema(schema, { target: "draft-2020-12" });
+    }).toJSONSchema(schema, { target: "draft-7" }) as Record<string, unknown>;
+    delete js.$schema;
     return JSON.stringify(js);
   } catch {
     return null;
@@ -320,26 +408,30 @@ async function runViaCli<T>(
 /* ------------------------------------------------------------------ */
 
 async function runStructured<T>(
-  prompt: string,
+  prompt: PromptParts,
   schema: ZodType<T>,
   tier: ModelTier,
+  effort: Effort,
   schemaHint: string
 ): Promise<{ result: T; backendLabel: string }> {
   const backend = resolveBackend(tier);
+  const flat = () => [...prompt.system, prompt.user].join("\n");
   if (backend.kind === "api") {
     try {
-      const result = await runViaApi(prompt, schema, backend.model, backend.oauth);
+      const result = await runViaApi(prompt, schema, backend.model, backend.oauth, effort);
       return { result, backendLabel: backend.label };
     } catch (err) {
-      // OAuth/API hiccup (401/429/network) → fall back to the CLI so the
-      // user still gets a result.
+      // OAuth hiccup (429/network/refresh failure) → fall back to the CLI so
+      // the user still gets a result. Real-key errors surface as-is.
       if (!backend.oauth) throw err;
-      const cliModel = CLI_MODEL[tier];
-      const result = await runViaCli(prompt, schema, cliModel, schemaHint);
-      return { result, backendLabel: `${cliModel} · Claude CLI (SDK fallback)` };
+      console.warn(
+        `[llm] SDK call failed, falling back to CLI: ${err instanceof Error ? err.message : err}`
+      );
+      const result = await runViaCli(flat(), schema, backend.model, schemaHint);
+      return { result, backendLabel: `${backend.model} · Claude CLI (SDK fallback)` };
     }
   }
-  const result = await runViaCli(prompt, schema, backend.model, schemaHint);
+  const result = await runViaCli(flat(), schema, backend.model, schemaHint);
   return { result, backendLabel: backend.label };
 }
 
@@ -359,10 +451,10 @@ Respond with ONLY a JSON object (no prose, no markdown) with this exact shape:
 }`;
 
 export async function runAnalysis(
-  prompt: string,
+  prompt: PromptParts,
   tier: ModelTier = DEFAULT_TIER
 ): Promise<{ result: AnalysisResult; backendLabel: string }> {
-  return runStructured(prompt, AnalysisSchema, tier, ANALYSIS_HINT);
+  return runStructured(prompt, AnalysisSchema, tier, analysisEffort(), ANALYSIS_HINT);
 }
 
 const EDIT_HINT = `
@@ -378,8 +470,9 @@ Respond with ONLY a JSON object (no prose, no markdown) with this exact shape:
 Only include operations for what the instruction requires. For "set", include only the fields that change (null = leave as-is). Do NOT emit operations for rows you are not changing.`;
 
 export async function runEditOps(
-  prompt: string,
+  prompt: PromptParts,
   tier: ModelTier = DEFAULT_TIER
 ): Promise<{ result: EditOpsResult; backendLabel: string }> {
-  return runStructured(prompt, EditOpsSchema, tier, EDIT_HINT);
+  // Targeted row edits are simple — low effort keeps chat edits snappy.
+  return runStructured(prompt, EditOpsSchema, tier, "low", EDIT_HINT);
 }

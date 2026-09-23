@@ -1,43 +1,31 @@
 import * as React from "react";
-import { ChevronLeft, ChevronRight, Loader2, ScanText } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, ScanText } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { fetchScreenshot, ocrScreenshot } from "@/server/fns";
-import { cn, timeToMin } from "@/lib/utils";
+import { ocrScreenshot } from "@/server/fns";
+import { cn, timeToMin, endMinOf, fmtTime, minToTime } from "@/lib/utils";
 import type { ScreenshotThumb } from "@/lib/types";
 
-/** Lazily load every day thumbnail into a path->dataURL map (kept across polls). */
+/** URL of a screenshot/thumbnail served by the /shot route (browser-cached). */
+export function shotUrl(path: string): string {
+  return `/shot?p=${encodeURIComponent(path)}`;
+}
+
+/**
+ * thumbPath -> URL for every screenshot of the day. The images themselves are
+ * loaded lazily by the browser (and cached), so this is free to compute.
+ */
 export function useDayThumbnails(shots: ScreenshotThumb[]) {
-  const [thumbs, setThumbs] = React.useState<Map<string, string>>(new Map());
-  const pathsKey = shots.map((s) => s.thumbPath).join("|");
+  return React.useMemo(
+    () => new Map(shots.map((s) => [s.thumbPath, shotUrl(s.thumbPath)])),
+    [shots]
+  );
+}
 
-  React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const missing = shots.filter((s) => !thumbs.has(s.thumbPath));
-      for (let i = 0; i < missing.length; i += 6) {
-        if (cancelled) return;
-        const batch = missing.slice(i, i + 6);
-        const urls = await Promise.all(
-          batch.map((s) =>
-            fetchScreenshot({ data: { path: s.thumbPath } }).catch(() => null)
-          )
-        );
-        if (cancelled) return;
-        setThumbs((prev) => {
-          const next = new Map(prev);
-          batch.forEach((s, j) => urls[j] && next.set(s.thumbPath, urls[j]!));
-          return next;
-        });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathsKey]);
-
-  return thumbs;
+/** Time window of the row a screenshot was opened from ("to" may be end of day). */
+export interface ShotRange {
+  from: string;
+  to: string;
 }
 
 /** Screenshots whose timestamp falls in [from, to). */
@@ -47,7 +35,7 @@ export function shotsInRange(
   to: string
 ): ScreenshotThumb[] {
   const a = timeToMin(from);
-  const b = to === "23:59" ? 24 * 60 : timeToMin(to);
+  const b = endMinOf(to);
   return shots.filter((s) => {
     const m = timeToMin(s.time);
     return m >= a && m < b;
@@ -68,7 +56,11 @@ export function EntryThumbs({
 }) {
   if (shots.length === 0)
     return <span className="text-[10px] text-muted-foreground/40">—</span>;
-  const shown = shots.slice(0, max);
+  // Spread the previews evenly across the row's time range.
+  const shown =
+    shots.length <= max
+      ? shots
+      : Array.from({ length: max }, (_, i) => shots[Math.round((i * (shots.length - 1)) / (max - 1))]);
   return (
     <div className="flex flex-wrap gap-1">
       {shown.map((s) => {
@@ -87,6 +79,8 @@ export function EntryThumbs({
               <img
                 src={url}
                 alt={s.time}
+                loading="lazy"
+                decoding="async"
                 className="h-10 w-16 rounded border border-border object-cover transition-transform group-hover:scale-110 group-hover:ring-1 group-hover:ring-ring"
               />
             ) : (
@@ -106,62 +100,87 @@ export function EntryThumbs({
   );
 }
 
-// Full-size images are large; cache the fetched data URLs so re-opening or
-// navigating back is instant.
-const fullImageCache = new Map<string, string>();
-
 /**
  * Full-size screenshot viewer: shows the thumbnail instantly as a placeholder
  * while the full image loads, fits the image to the dialog, and offers a
- * bottom strip of the day's screenshots (around the same time) to browse.
+ * bottom strip to browse. When opened from an entry row (`range`), browsing
+ * (arrows, ←/→ keys, strip) stays inside that row's time window; explicit
+ * "Earlier" / "Later" buttons widen the window to reach neighbouring shots.
  */
 export function ScreenshotViewer({
   shots,
   thumbs,
   current,
+  range,
   onClose,
   onNavigate,
 }: {
   shots: ScreenshotThumb[];
   thumbs: Map<string, string>;
   current: ScreenshotThumb | null;
+  range?: ShotRange | null;
   onClose: () => void;
   onNavigate: (s: ScreenshotThumb) => void;
 }) {
-  const [fullImage, setFullImage] = React.useState<string | null>(null);
   const [ocrText, setOcrText] = React.useState<string | null>(null);
   const [ocrBusy, setOcrBusy] = React.useState(false);
-  const seq = React.useRef(0);
   const stripRef = React.useRef<HTMLDivElement>(null);
 
-  const index = current ? shots.findIndex((s) => s.thumbPath === current.thumbPath) : -1;
+  // Window extension (minutes before/after the row), reset whenever the
+  // viewer is opened with a new range object.
+  const [ext, setExt] = React.useState({ for: range, before: 0, after: 0 });
+  const e = ext.for === range ? ext : { for: range, before: 0, after: 0 };
+  const winFrom = range ? Math.max(0, timeToMin(range.from) - e.before) : 0;
+  const winTo = range ? Math.min(24 * 60, endMinOf(range.to) + e.after) : 24 * 60;
+  const visible = React.useMemo(
+    () =>
+      range
+        ? shots.filter((x) => {
+            const m = timeToMin(x.time);
+            return m >= winFrom && m < winTo;
+          })
+        : shots,
+    [shots, range, winFrom, winTo]
+  );
+  const earlierShot = range
+    ? [...shots].reverse().find((x) => timeToMin(x.time) < winFrom)
+    : undefined;
+  const laterShot = range ? shots.find((x) => timeToMin(x.time) >= winTo) : undefined;
+
+  // Widen the window in 15-min steps up to the nearest shot outside it.
+  const showEarlier = () => {
+    if (!earlierShot || !range) return;
+    const start = Math.floor(timeToMin(earlierShot.time) / 15) * 15;
+    setExt({ ...e, before: timeToMin(range.from) - start });
+    onNavigate(earlierShot);
+  };
+  const showLater = () => {
+    if (!laterShot || !range) return;
+    const end = Math.min(24 * 60, Math.floor(timeToMin(laterShot.time) / 15) * 15 + 15);
+    setExt({ ...e, after: end - endMinOf(range.to) });
+    onNavigate(laterShot);
+  };
+
+  const index = current ? visible.findIndex((s) => s.thumbPath === current.thumbPath) : -1;
   const go = React.useCallback(
     (delta: number) => {
       if (index === -1) return;
-      const next = shots[index + delta];
+      const next = visible[index + delta];
       if (next) onNavigate(next);
     },
-    [index, shots, onNavigate]
+    [index, visible, onNavigate]
   );
 
-  // load full image (cached), keep thumb as placeholder meanwhile
+  React.useEffect(() => setOcrText(null), [current]);
+
+  // Preload the neighbours so ←/→ show the full image instantly.
   React.useEffect(() => {
-    if (!current) return;
-    setOcrText(null);
-    const cached = fullImageCache.get(current.path);
-    if (cached) {
-      setFullImage(cached);
-      return;
+    if (index === -1) return;
+    for (const d of [1, -1, 2]) {
+      const n = visible[index + d];
+      if (n) new Image().src = shotUrl(n.path);
     }
-    const my = ++seq.current;
-    setFullImage(null);
-    fetchScreenshot({ data: { path: current.path } })
-      .then((url) => {
-        fullImageCache.set(current.path, url);
-        if (seq.current === my) setFullImage(url);
-      })
-      .catch(() => {});
-  }, [current]);
+  }, [index, visible]);
 
   // arrow-key navigation + scroll active thumb into view
   React.useEffect(() => {
@@ -191,13 +210,22 @@ export function ScreenshotViewer({
   };
 
   const placeholder = current ? thumbs.get(current.thumbPath) : undefined;
-  const src = fullImage ?? placeholder ?? undefined;
 
   return (
     <Dialog
       open={!!current}
       onClose={onClose}
-      title={current ? `Screenshot ${current.time}` : ""}
+      title={
+        current
+          ? `Screenshot ${current.time}${
+              range
+                ? ` · ${index + 1} / ${visible.length} in ${minToTime(winFrom)}–${fmtTime(
+                    winTo === 24 * 60 ? "23:59" : minToTime(winTo)
+                  )}`
+                : ""
+            }`
+          : ""
+      }
       className="max-w-6xl"
     >
       <div className="relative flex items-center justify-center">
@@ -211,18 +239,33 @@ export function ScreenshotViewer({
         >
           <ChevronLeft size={16} />
         </Button>
-        <div className="flex max-h-[68vh] min-h-64 w-full items-center justify-center overflow-hidden rounded border border-border bg-black/30">
-          {src ? (
-            <img
-              src={src}
-              alt={current?.time}
-              className={cn(
-                "max-h-[68vh] max-w-full object-contain transition-[filter]",
-                !fullImage && "blur-[2px]"
+        {/*
+          Fixed-size frame with two stacked layers, both scaled to fill it:
+          the (cached) thumbnail, blurred, and the full image on top, which
+          simply paints over it as soon as its bytes arrive. Nothing waits on
+          a load event, so the viewer can never get stuck on the placeholder.
+        */}
+        <div className="relative h-[68vh] w-full overflow-hidden rounded border border-border bg-black/30">
+          {current && (
+            <>
+              {placeholder ? (
+                <img
+                  src={placeholder}
+                  alt=""
+                  aria-hidden
+                  className="absolute inset-0 h-full w-full object-contain blur-[2px]"
+                />
+              ) : (
+                <Loader2 className="absolute inset-0 m-auto animate-spin opacity-50" />
               )}
-            />
-          ) : (
-            <Loader2 className="animate-spin opacity-50" />
+              <img
+                key={current.path}
+                src={shotUrl(current.path)}
+                alt={current.time}
+                fetchPriority="high"
+                className="absolute inset-0 h-full w-full object-contain"
+              />
+            </>
           )}
         </div>
         <Button
@@ -230,16 +273,44 @@ export function ScreenshotViewer({
           variant="secondary"
           className="absolute right-1 top-1/2 z-10 -translate-y-1/2"
           onClick={() => go(1)}
-          disabled={index === -1 || index >= shots.length - 1}
+          disabled={index === -1 || index >= visible.length - 1}
           title="Next (→)"
         >
           <ChevronRight size={16} />
         </Button>
       </div>
 
-      {/* nearby-time strip */}
+      {/* explicit escape hatches out of the row's time window */}
+      {range && (
+        <div className="mt-2 flex items-center justify-between text-xs">
+          <Button
+            size="sm"
+            variant={index === 0 && earlierShot ? "default" : "secondary"}
+            disabled={!earlierShot}
+            onClick={showEarlier}
+            title="Include earlier screenshots (outside this entry's time range)"
+          >
+            <ChevronsLeft size={13} />
+            {earlierShot ? `Earlier (before ${minToTime(winFrom)})` : "No earlier screenshots"}
+          </Button>
+          <Button
+            size="sm"
+            variant={index === visible.length - 1 && laterShot ? "default" : "secondary"}
+            disabled={!laterShot}
+            onClick={showLater}
+            title="Include later screenshots (outside this entry's time range)"
+          >
+            {laterShot
+              ? `Later (after ${fmtTime(winTo === 24 * 60 ? "23:59" : minToTime(winTo))})`
+              : "No later screenshots"}
+            <ChevronsRight size={13} />
+          </Button>
+        </div>
+      )}
+
+      {/* strip — only the current window */}
       <div ref={stripRef} className="mt-2 flex gap-1 overflow-x-auto pb-1">
-        {shots.map((s) => {
+        {visible.map((s) => {
           const url = thumbs.get(s.thumbPath);
           const active = s.thumbPath === current?.thumbPath;
           return (
@@ -257,6 +328,8 @@ export function ScreenshotViewer({
                 <img
                   src={url}
                   alt={s.time}
+                  loading="lazy"
+                  decoding="async"
                   className={cn(
                     "h-11 w-16 rounded border object-cover",
                     active ? "border-primary ring-1 ring-primary" : "border-border"

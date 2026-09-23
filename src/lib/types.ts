@@ -152,7 +152,7 @@ export interface MonthData {
 }
 
 export interface QueueStatus {
-  running: string | null; // date currently being analyzed
+  running: string[]; // dates currently being analyzed
   pending: string[]; // queued dates
   recentErrors: { date: string; error: string }[];
 }
@@ -167,7 +167,27 @@ export interface DayDetail {
   activeMinutes: number;
   zepEntries: ZepEntryView[];
   screenshots: ScreenshotThumb[];
+  calendar: DayCalendar;
   isToday: boolean;
+}
+
+/** An Outlook calendar entry clipped to the day ("to" may be "23:59" = end of day). */
+export interface CalendarEvent {
+  from: string;
+  to: string;
+  subject: string;
+  location?: string;
+  allDay: boolean;
+  /** Graph showAs: free | tentative | busy | oof | workingElsewhere | unknown */
+  showAs: string;
+  online: boolean;
+  organizer?: string;
+}
+
+export interface DayCalendar {
+  status: "not-configured" | "signed-out" | "ok" | "error";
+  events: CalendarEvent[];
+  error?: string;
 }
 
 /** Project/task option for the editor combobox. */

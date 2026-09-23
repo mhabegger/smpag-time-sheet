@@ -1,7 +1,8 @@
 import * as React from "react";
-import { cn, timeToMin, fmtDuration } from "@/lib/utils";
+import { cn, timeToMin, fmtDuration, endMinOf, fmtTime } from "@/lib/utils";
 import { projectColor } from "@/lib/status";
 import type {
+  CalendarEvent,
   NonWorkSegment,
   SuggestedEntry,
   TimelineBucket,
@@ -13,11 +14,12 @@ interface DayTimelineProps {
   entries: SuggestedEntry[];
   nonWork: NonWorkSegment[];
   zepEntries: ZepEntryView[];
+  /** Outlook events; the Calendar row is shown only when this is provided. */
+  calendar?: CalendarEvent[];
   selectedId?: string | null;
   onSelectEntry?: (id: string) => void;
 }
 
-const endMinOf = (t: string) => (t === "23:59" ? 24 * 60 : timeToMin(t));
 
 const LABEL_W = "5rem"; // shared width of the left label column
 
@@ -26,9 +28,13 @@ export function DayTimeline({
   entries,
   nonWork,
   zepEntries,
+  calendar,
   selectedId,
   onSelectEntry,
 }: DayTimelineProps) {
+  const timedEvents = React.useMemo(() => (calendar ?? []).filter((e) => !e.allDay), [calendar]);
+  const allDayEvents = (calendar ?? []).filter((e) => e.allDay);
+  const calLayout = React.useMemo(() => layoutCalendar(timedEvents), [timedEvents]);
   const [hover, setHover] = React.useState<TimelineBucket | null>(null);
 
   const { startMin, endMin } = React.useMemo(() => {
@@ -36,11 +42,12 @@ export function DayTimeline({
     for (const b of timeline) mins.push(timeToMin(b.start), timeToMin(b.start) + b.minutes);
     for (const e of entries) mins.push(timeToMin(e.from), endMinOf(e.to));
     for (const z of zepEntries) mins.push(timeToMin(z.from), endMinOf(z.to));
+    for (const c of timedEvents) mins.push(timeToMin(c.from), endMinOf(c.to));
     if (mins.length === 0) return { startMin: 7 * 60, endMin: 19 * 60 };
     const lo = Math.floor(Math.min(...mins) / 60) * 60;
     const hi = Math.min(24 * 60, Math.ceil(Math.max(...mins) / 60) * 60);
     return { startMin: lo, endMin: Math.max(hi, lo + 60) };
-  }, [timeline, entries, zepEntries]);
+  }, [timeline, entries, zepEntries, timedEvents]);
 
   const span = endMin - startMin;
   const pos = (min: number) => ((min - startMin) / span) * 100;
@@ -82,6 +89,7 @@ export function DayTimeline({
           <RowLabel>Activity</RowLabel>
           <RowLabel>Suggested</RowLabel>
           <RowLabel>In ZEP</RowLabel>
+          {calendar && <RowLabel height={calLayout.height}>Calendar</RowLabel>}
         </div>
 
         {/* plot */}
@@ -122,7 +130,7 @@ export function DayTimeline({
               return (
                 <div
                   key={`nw${i}`}
-                  title={`${s.from}-${s.to} ${s.kind}${s.note ? ` — ${s.note}` : ""}`}
+                  title={`${s.from}-${fmtTime(s.to)} ${s.kind}${s.note ? ` — ${s.note}` : ""}`}
                   className="absolute inset-y-0 flex items-center justify-center overflow-hidden rounded-sm bg-secondary/80 text-[9px] text-muted-foreground"
                   style={{ left: `${pos(timeToMin(s.from))}%`, width: `${w}%` }}
                 >
@@ -133,7 +141,7 @@ export function DayTimeline({
             {entries.map((e) => (
               <button
                 key={e.id}
-                title={`${e.from}-${e.to} ${e.project} / ${e.task} (${e.confidence}%)${e.approved ? " ✓ approved" : " — not yet reviewed"}\n${e.note}`}
+                title={`${e.from}-${fmtTime(e.to)} ${e.project} / ${e.task} (${e.confidence}%)${e.approved ? " ✓ approved" : " — not yet reviewed"}\n${e.note}`}
                 onClick={() => onSelectEntry?.(e.id)}
                 className={cn(
                   "absolute inset-y-0 cursor-pointer rounded-sm transition-all",
@@ -156,11 +164,11 @@ export function DayTimeline({
           </Track>
 
           {/* In ZEP */}
-          <Track last>
+          <Track last={!calendar}>
             {zepEntries.map((z) => (
               <div
                 key={z.id}
-                title={`${z.from}-${z.to} ${z.project} / ${z.task}${z.note ? `\n${z.note}` : ""}`}
+                title={`${z.from}-${fmtTime(z.to)} ${z.project} / ${z.task}${z.note ? `\n${z.note}` : ""}`}
                 className="absolute inset-y-0 rounded-sm bg-ok/70"
                 style={{
                   left: `${pos(timeToMin(z.from))}%`,
@@ -169,8 +177,44 @@ export function DayTimeline({
               />
             ))}
           </Track>
+
+          {/* Outlook calendar */}
+          {calendar && (
+            <Track last height={calLayout.height}>
+              {calLayout.items.map(({ ev: c, lane }, i) => {
+                const a = timeToMin(c.from);
+                const b = endMinOf(c.to);
+                const w = width(a, b);
+                return (
+                  <div
+                    key={`cal${i}`}
+                    title={`${c.from}-${fmtTime(c.to)} ${c.subject}${c.location ? ` @ ${c.location}` : ""}${c.organizer ? `\norganizer: ${c.organizer}` : ""}${c.showAs !== "busy" ? `\n(${c.showAs})` : ""}`}
+                    className={cn(
+                      "absolute flex items-center overflow-hidden rounded-sm border border-violet-400/60 bg-violet-500/30 text-[9px] leading-none text-violet-100",
+                      isSoft(c) && "border-dashed opacity-60",
+                      w > 3 ? "px-1" : "px-px"
+                    )}
+                    style={{
+                      left: `${pos(a)}%`,
+                      width: `${w}%`,
+                      top: lane * (CAL_LANE_H + CAL_LANE_GAP),
+                      height: CAL_LANE_H,
+                    }}
+                  >
+                    <span className={cn("whitespace-nowrap", w > 6 && "truncate")}>{c.subject}</span>
+                  </div>
+                );
+              })}
+            </Track>
+          )}
         </div>
       </div>
+
+      {allDayEvents.length > 0 && (
+        <div className="mt-1.5 text-[11px] text-violet-300/80" style={{ paddingLeft: LABEL_W }}>
+          All day: {allDayEvents.map((e) => e.subject).join(" · ")}
+        </div>
+      )}
 
       {/* hover details */}
       <div className="mt-2 min-h-9 text-xs text-muted-foreground">
@@ -195,9 +239,52 @@ export function DayTimeline({
   );
 }
 
-function RowLabel({ children }: { children: React.ReactNode }) {
+/* Calendar lanes: overlapping meetings are stacked instead of hiding each other. */
+const CAL_LANE_H = 20;
+const CAL_LANE_GAP = 2;
+
+const isSoft = (c: CalendarEvent) => c.showAs === "free" || c.showAs === "tentative";
+
+/**
+ * Greedy lane assignment. Real (busy) meetings are placed first so they take
+ * the top lanes; free/tentative placeholders (e.g. "Projects & Dev" blocks)
+ * sink below them.
+ */
+function layoutCalendar(events: CalendarEvent[]): {
+  items: { ev: CalendarEvent; lane: number }[];
+  height: number;
+} {
+  const sorted = [...events].sort(
+    (x, y) =>
+      Number(isSoft(x)) - Number(isSoft(y)) ||
+      timeToMin(x.from) - timeToMin(y.from) ||
+      endMinOf(y.to) - endMinOf(x.to)
+  );
+  const lanes: [number, number][][] = [];
+  const items = sorted.map((ev) => {
+    const a = timeToMin(ev.from);
+    const b = endMinOf(ev.to);
+    let lane = lanes.findIndex((l) => l.every(([s, e]) => b <= s || a >= e));
+    if (lane === -1) {
+      lane = lanes.length;
+      lanes.push([]);
+    }
+    lanes[lane].push([a, b]);
+    return { ev, lane };
+  });
+  const n = Math.max(1, lanes.length);
+  return { items, height: n * CAL_LANE_H + (n - 1) * CAL_LANE_GAP };
+}
+
+function RowLabel({ children, height }: { children: React.ReactNode; height?: number }) {
   return (
-    <div className="flex h-6 items-center justify-end text-[10px] uppercase tracking-wide text-muted-foreground/70">
+    <div
+      className={cn(
+        "flex h-6 justify-end text-[10px] uppercase tracking-wide text-muted-foreground/70",
+        height ? "items-start pt-1" : "items-center"
+      )}
+      style={height ? { height } : undefined}
+    >
       {children}
     </div>
   );
@@ -207,10 +294,12 @@ function Track({
   children,
   striped,
   last,
+  height,
 }: {
   children: React.ReactNode;
   striped?: boolean;
   last?: boolean;
+  height?: number;
 }) {
   return (
     <div
@@ -218,14 +307,15 @@ function Track({
         "relative h-6 overflow-hidden rounded-sm",
         !last && "mb-1.5"
       )}
-      style={
-        striped
+      style={{
+        ...(height ? { height } : {}),
+        ...(striped
           ? {
               backgroundImage:
                 "repeating-linear-gradient(45deg, oklch(1 0 0 / 0.05) 0 6px, transparent 6px 12px)",
             }
-          : undefined
-      }
+          : {}),
+      }}
     >
       {children}
     </div>

@@ -5,7 +5,7 @@
  */
 
 import { createServerFn } from "@tanstack/react-start";
-import type { ModelTier } from "./llm.js";
+import { DEFAULT_TIER, type ModelTier } from "../lib/models.js";
 import type {
   ChatRef,
   DashboardData,
@@ -70,29 +70,29 @@ export const fetchProjectStatus = createServerFn({ method: "GET" }).handler(
   }
 );
 
-export const fetchScreenshot = createServerFn({ method: "GET" })
-  .validator((d: { path: string }) => d)
-  .handler(async ({ data }): Promise<string> => {
-    const { readScreenshot } = await import("./screenshots.js");
-    return readScreenshot(data.path);
-  });
-
 export const ocrScreenshot = createServerFn({ method: "POST" })
   .validator((d: { path: string }) => d)
   .handler(async ({ data }): Promise<string> => {
-    const { readScreenshot } = await import("./screenshots.js");
-    // security check happens inside readScreenshot; reuse it before OCR
-    await readScreenshot(data.path);
+    const { containedPath } = await import("./screenshots.js");
+    containedPath(data.path); // throws for paths outside the screenshots root
     const { ocrImages } = await import("../manictime/ocr.js");
     const results = await ocrImages([data.path]);
     return results[0]?.text ?? "";
+  });
+
+/** Drop the cached ManicTime dump for a day — the next fetchDay re-queries ManicTime. */
+export const recheckManicTime = createServerFn({ method: "POST" })
+  .validator((d: { date: string }) => d)
+  .handler(async ({ data }): Promise<void> => {
+    const { invalidateDayDump } = await import("./service.js");
+    invalidateDayDump(data.date);
   });
 
 export const queueAnalysis = createServerFn({ method: "POST" })
   .validator((d: { dates: string[]; tier?: ModelTier }) => d)
   .handler(async ({ data }): Promise<QueueStatus> => {
     const { enqueueDays } = await import("./queue.js");
-    return enqueueDays(data.dates, data.tier ?? "fast");
+    return enqueueDays(data.dates, data.tier ?? DEFAULT_TIER);
   });
 
 export const chatEdit = createServerFn({ method: "POST" })
@@ -113,7 +113,7 @@ export const chatEdit = createServerFn({ method: "POST" })
       data.instruction,
       { entries: data.entries, nonWork: data.nonWork },
       data.refs ?? [],
-      data.tier ?? "fast"
+      data.tier ?? DEFAULT_TIER
     );
   });
 
@@ -122,6 +122,14 @@ export const saveDayContext = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<DayRecord> => {
     const { saveContext } = await import("./service.js");
     return saveContext(data.date, data.context);
+  });
+
+/** Persist a proposed recurring rule only after the user explicitly accepts it. */
+export const addRecurringMemory = createServerFn({ method: "POST" })
+  .validator((d: { rule: string }) => d)
+  .handler(async ({ data }) => {
+    const { addRecurringRule } = await import("./recurring-memory.js");
+    return addRecurringRule(data.rule);
   });
 
 export const saveDayEntries = createServerFn({ method: "POST" })
@@ -150,3 +158,27 @@ export const submitDayToZep = createServerFn({ method: "POST" })
     const { submitDay } = await import("./service.js");
     return submitDay(data.date, data.entries);
   });
+
+/* ---------------- Outlook calendar (Microsoft Graph) ---------------- */
+
+export const fetchCalendarAuth = createServerFn({ method: "GET" }).handler(async () => {
+  const { calendarAuthStatus } = await import("./calendar.js");
+  return calendarAuthStatus();
+});
+
+export const connectCalendar = createServerFn({ method: "POST" }).handler(async () => {
+  const { startCalendarSignIn } = await import("./calendar.js");
+  return startCalendarSignIn();
+});
+
+export const disconnectCalendar = createServerFn({ method: "POST" }).handler(async () => {
+  const { signOutCalendar } = await import("./calendar.js");
+  return signOutCalendar();
+});
+
+export const clearQueueErrors = createServerFn({ method: "POST" }).handler(
+  async (): Promise<QueueStatus> => {
+    const { clearRecentErrors } = await import("./queue.js");
+    return clearRecentErrors();
+  }
+);

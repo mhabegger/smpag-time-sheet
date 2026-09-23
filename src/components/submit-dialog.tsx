@@ -4,7 +4,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { submitDayToZep } from "@/server/fns";
-import { timeToMin, fmtDuration, cn } from "@/lib/utils";
+import { timeToMin, fmtDuration, cn, endMinOf, fmtTime } from "@/lib/utils";
 import type { ProjectTaskOption, SuggestedEntry } from "@/lib/types";
 import type { TaskCandidate } from "@/zep/submit-lib";
 
@@ -29,7 +29,6 @@ interface Ambiguity {
   candidates: TaskCandidate[];
 }
 
-const endMinOf = (t: string) => (t === "23:59" ? 24 * 60 - 1 : timeToMin(t));
 
 export function SubmitDialog({
   open,
@@ -109,7 +108,7 @@ export function SubmitDialog({
             return [
               {
                 id: entry.id,
-                label: `${entry.from}–${entry.to} ${entry.project}`,
+                label: `${entry.from}–${fmtTime(entry.to)} ${entry.project}`,
                 taskName: entry.subtask ?? entry.task,
                 candidates: er.candidates,
               },
@@ -141,6 +140,9 @@ export function SubmitDialog({
       open={open}
       onClose={onClose}
       locked={phase === "submitting"}
+      onConfirm={
+        phase === "done" ? onClose : selected.length > 0 ? () => void submit() : undefined
+      }
       title={
         phase === "done" ? `Submitted — ${date}` : `Submit to ZEP — ${date}`
       }
@@ -148,6 +150,7 @@ export function SubmitDialog({
     >
       {phase !== "done" && (
         <>
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
           <table className="w-full text-sm">
             <tbody>
               {entries.map((e) => {
@@ -170,7 +173,7 @@ export function SubmitDialog({
                       />
                     </td>
                     <td className="w-28 whitespace-nowrap tabular-nums">
-                      {e.from}–{e.to}
+                      {e.from}–{fmtTime(e.to)}
                     </td>
                     <td className="w-64 pr-2">
                       <div className="truncate font-medium">{e.project}</div>
@@ -203,9 +206,10 @@ export function SubmitDialog({
               })}
             </tbody>
           </table>
+          </div>
 
           {ambiguities.length > 0 && (
-            <div className="mt-3 space-y-2 rounded-md border border-warn/40 bg-warn/10 p-2 text-sm">
+            <div className="mt-3 max-h-48 shrink-0 space-y-2 overflow-y-auto rounded-md border border-warn/40 bg-warn/10 p-2 text-sm">
               <div className="flex items-center gap-1.5 font-medium text-warn">
                 <AlertTriangle size={13} /> Nothing was submitted — some task names
                 match several ZEP tasks. Pick the intended one, then submit again:
@@ -233,12 +237,12 @@ export function SubmitDialog({
           )}
 
           {error && (
-            <div className="mt-3 rounded-md border border-destructive/50 bg-destructive/10 p-2 text-sm whitespace-pre-wrap">
+            <div className="mt-3 max-h-40 shrink-0 overflow-y-auto rounded-md border border-destructive/50 bg-destructive/10 p-2 text-sm whitespace-pre-wrap">
               {error}
             </div>
           )}
 
-          <div className="mt-4 flex items-center justify-between">
+          <div className="mt-4 flex shrink-0 items-center justify-between border-t border-border/60 pt-3">
             <div className="text-sm text-muted-foreground">
               {selected.length} entries ·{" "}
               <span className="font-semibold text-foreground">
@@ -261,6 +265,9 @@ export function SubmitDialog({
                 ) : (
                   <>
                     <Send size={13} /> Submit {selected.length} entries
+                    <kbd className="ml-1 rounded bg-black/20 px-1 text-[10px] font-normal opacity-80">
+                      Ctrl+↵
+                    </kbd>
                   </>
                 )}
               </Button>
@@ -280,7 +287,7 @@ export function SubmitDialog({
           {result.skipped.length > 0 && (
             <div className="text-sm text-warn">
               ⊘ Skipped (overlap with existing ZEP entries):{" "}
-              {result.skipped.map((s) => `${s.from}–${s.to}`).join(", ")}
+              {result.skipped.map((s) => `${s.from}–${fmtTime(s.to)}`).join(", ")}
             </div>
           )}
           {result.errors.length > 0 && (

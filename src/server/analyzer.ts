@@ -20,8 +20,10 @@ import {
 } from "./zep.js";
 import { loadDay, updateDay, emptyRecord } from "./store.js";
 import { CLASSIFICATION_RULES, EDIT_RULES } from "./rules.js";
+import { loadRecurringMemory } from "./recurring-memory.js";
+import { getDayCalendar } from "./calendar.js";
 import { runAnalysis, runEditOps, type ModelTier, DEFAULT_TIER } from "./llm.js";
-import type { ChatRef } from "../lib/types.js";
+import type { CalendarEvent, ChatRef } from "../lib/types.js";
 import { timeToMin, minToTime, snap15 } from "../lib/utils.js";
 import type {
   DayRecord,
@@ -192,6 +194,21 @@ function fmtZepEntries(entries: ZepEntryView[]): string {
     .join("\n");
 }
 
+function fmtCalendar(events: CalendarEvent[]): string {
+  return events
+    .map((e) => {
+      const time = e.allDay ? "all day" : `${e.from}-${e.to === "23:59" ? "24:00" : e.to}`;
+      const extra = [
+        e.showAs !== "busy" ? e.showAs : "",
+        e.online ? "online" : "",
+        e.location ? `@ ${e.location}` : "",
+        e.organizer ? `organizer ${e.organizer}` : "",
+      ].filter(Boolean);
+      return `- ${time} ${e.subject}${extra.length ? ` (${extra.join(", ")})` : ""}`;
+    })
+    .join("\n");
+}
+
 function fmtLocked(entries: SuggestedEntry[]): string {
   return entries
     .map(
@@ -217,12 +234,14 @@ export async function analyzeDay(
     const today = format(new Date(), "yyyy-MM-dd");
     const isToday = date === today;
 
-    const [dump, ocr, zepByDay, projectListText, options] = await Promise.all([
+    const [dump, ocr, zepByDay, projectListText, options, recurringMemory, calendar] = await Promise.all([
       getDayActivities(date),
       getOcrSamples(date, 30),
       getAttendancesByDay(date, date),
       getProjectLeafListText(date),
       getProjectOptions(date),
+      loadRecurringMemory(),
+      getDayCalendar(date),
     ]);
 
     const timeline = renderTimelineText(dump, 15);
@@ -230,7 +249,8 @@ export async function analyzeDay(
       timeline.buckets.reduce((s, b) => s + b.activeSec, 0) / 60
     );
 
-    if (timeline.buckets.length === 0 || activeMinutes < 10) {
+    const busyMeetings = calendar.events.filter((e) => !e.allDay && e.showAs !== "free");
+    if ((timeline.buckets.length === 0 || activeMinutes < 10) && busyMeetings.length === 0) {
       return await updateDay(date, (r) => {
         r.status = "empty";
         r.analysis = {
@@ -253,9 +273,16 @@ export async function analyzeDay(
         )
         .join("\n") || "(no screenshots / OCR available)";
 
-    const prompt = [
+    // Stable prefix (identical for every day of the month) → prompt-cached.
+    const system = [
       CLASSIFICATION_RULES,
-      `\n## Day to classify\n${weekdayName(date)}, ${date}${isToday ? " (TODAY — the day is still in progress; classify only what happened so far, do not speculate about the rest)" : ""}`,
+      `## Available ZEP projects and BOOKABLE leaf tasks (use the exact task name shown — never a parent/heading)\n${projectListText}`,
+    ];
+    const user = [
+      `## Day to classify\n${weekdayName(date)}, ${date}${isToday ? " (TODAY — the day is still in progress; classify only what happened so far, do not speculate about the rest)" : ""}`,
+      recurringMemory
+        ? `\n## User-approved recurring rules\n${recurringMemory}\nApply these only when their condition matches this date. Day-specific context below overrides them.`
+        : "",
       prior.context
         ? `\n## User-provided context for this day (AUTHORITATIVE)\n${prior.context}`
         : "",
@@ -263,15 +290,17 @@ export async function analyzeDay(
         ? `\n## Locked entries (already confirmed by the user — do NOT re-emit or overlap these, classify only the remaining time)\n${fmtLocked(locked)}`
         : "",
       `\n## Already tracked in ZEP (do NOT overlap these)\n${fmtZepEntries(zepEntries)}`,
-      `\n## Available ZEP projects and BOOKABLE leaf tasks (use the exact task name shown — never a parent/heading)\n${projectListText}`,
-      `\n## Activity timeline (15-min windows, apps + window titles + <ctx: websites/documents>)\n${timeline.text}`,
+      calendar.events.length
+        ? `\n## Outlook calendar for this day\n${fmtCalendar(calendar.events)}\nThe user often attends meetings AWAY from the computer, so ManicTime shows nothing for them. A work meeting here that falls in an inactive gap is real work: book it as an entry (classify from the subject/organizer/location, note = the meeting subject) instead of an "away" segment. Where the computer WAS active during a meeting, still use the subject to classify that time. Ignore private/"free" appointments unless activity confirms them; context from the user above overrides the calendar.`
+        : "",
+      `\n## Activity timeline (15-min windows, apps + window titles + <ctx: websites/documents>)\n${timeline.text.trim() || "(no computer activity recorded — rely on the calendar)"}`,
       `\n## Screenshot OCR samples\n${ocrText}`,
       `\nNow produce the timesheet entries and non-work segments for the ENTIRE active period shown above.`,
     ]
       .filter(Boolean)
       .join("\n");
 
-    const { result, backendLabel } = await runAnalysis(prompt, tier);
+    const { result, backendLabel } = await runAnalysis({ system, user }, tier);
 
     const validKeys = new Set(
       options.map((o) => `${o.projectName} ${o.taskName}`)
@@ -306,6 +335,9 @@ export async function analyzeDay(
       r.suggestions = [...freshLocked, ...kept].sort(
         (a, b) => timeToMin(a.from) - timeToMin(b.from)
       );
+      // Nothing to book (e.g. only a private calendar item) → the day is done,
+      // not "suggestions ready".
+      if (r.suggestions.length === 0) r.status = "empty";
       r.nonWork = nonWork;
       r.analysis = {
         analyzedAt: new Date().toISOString(),
@@ -519,9 +551,12 @@ export async function editEntries(
     to: string;
   }[];
 
-  const prompt = [
-    `You edit a timesheet by emitting OPERATIONS. The user reviews ${weekdayName(date)}, ${date} and gives an instruction to change SOME rows.`,
-    EDIT_RULES,
+  const system = [
+    `You edit a timesheet by emitting OPERATIONS. The user reviews a day and gives an instruction to change SOME rows.\n${EDIT_RULES}`,
+    `## Available ZEP projects and BOOKABLE leaf tasks (use the exact leaf task name — never a parent/heading)\n${projectListText}`,
+  ];
+  const user = [
+    `## Day under review\n${weekdayName(date)}, ${date}`,
     `\n## How to respond
 - Emit one operation per change: "set" (modify a row by number — include only the fields that change), "add" (new entry), or "remove" (delete a row by number).
 - Change ONLY what the instruction asks. Do NOT emit operations for rows you are not changing.
@@ -535,14 +570,13 @@ export async function editEntries(
     zepEntries.length
       ? `\n## Already in ZEP (do NOT overlap)\n${fmtZepEntries(zepEntries)}`
       : "",
-    `\n## Available ZEP projects and BOOKABLE leaf tasks (use the exact leaf task name — never a parent/heading)\n${projectListText}`,
     timeline ? `\n## Activity timeline for reference (15-min windows)\n${timeline.text}` : "",
     `\n## The user's instruction\n"${instruction}"`,
   ]
     .filter(Boolean)
     .join("\n");
 
-  const { result } = await runEditOps(prompt, tier);
+  const { result } = await runEditOps({ system, user }, tier);
 
   const validKeys = new Set(options.map((o) => `${o.projectName} ${o.taskName}`));
   const validProjects = new Set(options.map((o) => o.projectName));
